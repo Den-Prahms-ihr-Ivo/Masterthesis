@@ -1,0 +1,23 @@
+# experiment output (backed up via rsync, archived separately)
+results/
+
+# python
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+
+# test tooling
+.pytest_cache/
+.hypothesis/
+.coverage
+
+# secrets: credentials live only in ~/.repair-study.env, this is a safety net
+*.env
+.env*
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reroster"
+version = "0.1.0"
+description = "Sequential personnel schedule repair: quality, stability and fairness (master's thesis)"
+requires-python = ">=3.11"
+dependencies = ["pyscipopt==X.Y.Z"]      # fill in from `pip show pyscipopt`
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "solver: needs PySCIPOpt/SCIP (deselect with -m 'not solver')",
+    "slow: statistical or large tests (deselect with -m 'not slow')",
+]
