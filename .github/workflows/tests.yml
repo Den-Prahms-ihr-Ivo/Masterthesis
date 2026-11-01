@@ -6,14 +6,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
-
-      - name: Rewrite requirements.lock to use authenticated HTTPS
-        run: |
-          sed -i 's|git+ssh://[^@]*@github.com|git+https://${{ secrets.GH_PAT }}@github.com|g' requirements.lock
-          sed -i 's|ssh://[^@]*@github.com|git+https://${{ secrets.GH_PAT }}@github.com|g' requirements.lock
-
-      - run: pip install -r requirements.lock && pip install -e . --no-deps
-      - run: pytest -m "not slow and not todo"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -m "not slow and not todo"
