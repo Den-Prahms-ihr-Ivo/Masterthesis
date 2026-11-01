@@ -3,14 +3,17 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reroster"
+name = "repair-study"
 version = "0.1.0"
-description = "Sequential personnel schedule repair: quality, stability and fairness (master's thesis)"
-requires-python = ">=3.11"
-dependencies = ["pyscipopt==X.Y.Z"]      # fill in from `pip show pyscipopt`
+requires-python = ">=3.12"    
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyscipopt>=5.0",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "hypothesis>=6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -18,8 +21,15 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
-addopts = "--strict-markers"
+addopts = "-m 'not todo'"
 markers = [
     "solver: needs PySCIPOpt/SCIP (deselect with -m 'not solver')",
     "slow: statistical or large tests (deselect with -m 'not slow')",
+    "todo: marks tests as work-in-progress / todo",
+    "ivo: test i want to focus on",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
 ]
