@@ -1,3 +1,4 @@
+import json
 import pytest
 import dataclasses
 
@@ -20,8 +21,10 @@ from repair.model import (
     PreferenceChange,
     PolicyName,
     ReferenceMode,
+    SequenceKind,
     SequenceProfile,
     StageStatus,
+    _stable_json,
 )
 from tests.builders import make_instance, make_volunteer, make_shift
 
@@ -98,7 +101,7 @@ def _replace_event(seq, index, new_event):
 def _example_sequence() -> Sequence:
     """Builds a fresh object on every call, covering every event type."""
     return Sequence(
-        kind=SequenceProfile.RQ2,
+        kind=SequenceKind.RQ2,
         profile=SequenceProfile.RQ2,
         seed=12345,
         events=(
@@ -163,23 +166,23 @@ def test_dataclasses_are_frozen():
         seed=0,
     )
 
-    arm = Arm(policy=None, reference=None, lam=2, alpha=None)
+    arm = Arm(policy=PolicyName.WQS, reference=ReferenceMode.CHAINED, lam=2)
 
-    sequence = Sequence(kind=None, profile=None, seed=42, events=None, selected=None)
+    sequence = _example_sequence()
 
-    step = Step(t=0, schedule=None, stages=None)
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        instance.shifts = []
+    step = Step(t=0, schedule=frozenset(), stages=())
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        arm.lam = -1
+        instance.shifts = ()  # type: ignore[misc]
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        sequence.selected = "balanced"
+        arm.lam = -1  # type: ignore[misc]
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        step.t = -1
+        sequence.selected = (0, 0)  # type: ignore[misc]
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        step.t = -1  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(
@@ -231,14 +234,69 @@ def test_arm_names_unique_across_protocol_arms():
     assert len(names) == len(arms)
 
 
+def test_main_arms_are_exactly_the_five_policies():
+    """Each main arm carries only its own parameter; QO has no reference."""
+    assert protocol.main_arms(2, Fraction(1)) == (
+        Arm(PolicyName.QO, None),
+        Arm(PolicyName.SF, ReferenceMode.CHAINED),
+        Arm(PolicyName.QL, ReferenceMode.CHAINED),
+        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=2),
+        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(1)),
+    )
+
+
+def test_main_arm_names():
+    """The names match the ones in expected.py and in stored results."""
+    assert [arm.name for arm in protocol.main_arms(2, Fraction(1))] == [
+        "QO",
+        "SF-chained",
+        "QL-chained",
+        "WQS-chained-l2",
+        "HWF-chained-a1",
+    ]
+
+
+def test_rq2_arms_differ_only_in_reference():
+    assert protocol.rq2_arms() == (
+        Arm(PolicyName.SF, ReferenceMode.ANCHORED),
+        Arm(PolicyName.SF, ReferenceMode.CHAINED),
+    )
+
+
+def test_sensitivity_arms_vary_one_parameter_per_policy():
+    """WQS varies lam only, HWF varies alpha only: one arm per grid value, no cross product."""
+    arms = protocol.sensitivity_arms((1, 4), (Fraction(1, 2), Fraction(2)))
+
+    assert arms == (
+        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=1),
+        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=4),
+        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(1, 2)),
+        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(2)),
+    )
+    assert [arm.name for arm in arms] == [
+        "WQS-chained-l1",
+        "WQS-chained-l4",
+        "HWF-chained-a1/2",
+        "HWF-chained-a2",
+    ]
+
+
 def test_lexresult_certified_false_without_schedule():
     """LexResult(schedule=None, ...) is not certified, even if every recorded stage is 'optimal'."""
     stages = (
         StageRecord(
-            name="MinShortfall", status="optimal", value=0, bound=0.0, seconds=0.1
+            name="MinShortfall",
+            status=StageStatus.OPTIMAL,
+            value=0,
+            bound=0.0,
+            seconds=0.1,
         ),
         StageRecord(
-            name="MaxQuality", status="optimal", value=6, bound=6.0, seconds=0.2
+            name="MaxQuality",
+            status=StageStatus.OPTIMAL,
+            value=6,
+            bound=6.0,
+            seconds=0.2,
         ),
     )
     result = LexResult(schedule=None, stages=stages)
@@ -249,8 +307,8 @@ def test_lexresult_certified_false_without_schedule():
 @pytest.mark.parametrize("timed_out_stage", [0, 1, 2])
 def test_lexresult_certified_false_with_time_limit_stage(timed_out_stage):
     """A schedule exists, but one stage hit the time limit -> not certified, wherever that stage is."""
-    statuses = ["optimal", "optimal", "optimal"]
-    statuses[timed_out_stage] = "time_limit"
+    statuses = [StageStatus.OPTIMAL, StageStatus.OPTIMAL, StageStatus.OPTIMAL]
+    statuses[timed_out_stage] = StageStatus.TIME_LIMIT
     stages = tuple(
         StageRecord(name=f"stage{i}", status=status, value=5, bound=7.0, seconds=600.0)
         for i, status in enumerate(statuses)
@@ -349,9 +407,36 @@ def test_digest_pinned():
     (field order, JSON settings, Fraction formatting, a renamed event class),
     old and new results no longer match. This test makes such a change loud.
     """
-    EXAMPLE_DIGEST = "39773f9d9ddbd0eba062a08a54a44bc1cb75bdcb6eb857c10e3415f5025ae0c2"
+    EXAMPLE_DIGEST = "704dbdbadf2253b4f40558b6310dff4e700ec76b17105ae0c8462fe51cc56b91"
 
     assert _example_sequence().digest() == EXAMPLE_DIGEST
+
+
+def test_digest_input_is_canonical_json():
+    """The digest hashes real JSON with plain values and tagged events, not a repr()."""
+    payload = json.loads(_stable_json(_example_sequence()))
+
+    assert payload["kind"] == "rq2"
+    assert payload["selected"] == [3, 7]
+    assert payload["events"][0] == {
+        "__type__": "AvailabilityRemoval",
+        "pairs": [[3, 7]],
+    }
+
+
+def test_digest_equal_for_enum_and_its_string_value():
+    """A sequence read back with plain strings still matches the original."""
+    original = _example_sequence()
+    reloaded = replace(original, kind="rq2", profile="rq2")  # type: ignore[arg-type]
+
+    assert reloaded == original  # guard: StrEnum members equal their values
+    assert reloaded.digest() == original.digest()
+
+
+def test_stable_json_rejects_unknown_types():
+    """An unsupported value raises instead of being hashed through str()."""
+    with pytest.raises(TypeError):
+        _stable_json(frozenset({(0, 0)}))
 
 
 # --- 1.1 validation ---------------------------------------------------------------------

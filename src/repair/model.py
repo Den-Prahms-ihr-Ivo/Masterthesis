@@ -14,7 +14,7 @@ import hashlib
 import json
 
 from enum import StrEnum
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from fractions import Fraction
 from typing import Union
 
@@ -287,7 +287,7 @@ class Sequence:
     selected: tuple[VolunteerId, int] | None = None  # RQ2 forcing pair
 
     def digest(self) -> str:
-        """Stable hash of kind, profile, seed and events (replay check across arms)."""
+        """Stable hash of kind, profile, seed, events and selected (replay check across arms)."""
         return _sha256(_stable_json(self))
 
 
@@ -441,9 +441,19 @@ class SequenceResult:
     manifest: dict
 
 
+def _json_default(obj: object) -> dict[str, object]:
+    """Dataclasses become dicts tagged with their class name; anything else is an error."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return {
+            "__type__": type(obj).__name__,
+            **{f.name: getattr(obj, f.name) for f in fields(obj)},
+        }
+    raise TypeError(f"cannot digest {type(obj).__name__}: {obj!r}")
+
+
 def _stable_json(obj: object) -> str:
-    """Helper for digests: canonical JSON with sorted keys."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+    """Helper for digests: canonical JSON with sorted keys (StrEnums encode as their values)."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=_json_default)
 
 
 def _sha256(text: str) -> str:

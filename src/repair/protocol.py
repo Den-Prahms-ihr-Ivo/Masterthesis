@@ -113,37 +113,37 @@ def derive_seed(root: int, *keys: object) -> int:
 
 
 def main_arms(lam: int, alpha: Fraction) -> tuple[Arm, ...]:
-    """QO plus SF, QL, WQS(lam), HWF(alpha), all chained."""
-
-    return tuple(
-        Arm(policy=policy, reference=ReferenceMode.CHAINED, lam=lam, alpha=alpha)
-        for policy in PolicyName
+    """QO plus SF, QL, WQS(lam), HWF(alpha), all chained (QO has no reference)."""
+    return (
+        Arm(policy=PolicyName.QO, reference=None),
+        Arm(policy=PolicyName.SF, reference=ReferenceMode.CHAINED),
+        Arm(policy=PolicyName.QL, reference=ReferenceMode.CHAINED),
+        Arm(policy=PolicyName.WQS, reference=ReferenceMode.CHAINED, lam=lam),
+        Arm(policy=PolicyName.HWF, reference=ReferenceMode.CHAINED, alpha=alpha),
     )
 
 
 def rq2_arms() -> tuple[Arm, ...]:
-    """SF-anchored and SF-chained."""
+    """SF-anchored and SF-chained: same policy, the reference is the only difference."""
     return tuple(
-        Arm(policy=policy, reference=ReferenceMode.CHAINED)
-        for policy in (PolicyName.WQS, PolicyName.HWF)
+        Arm(policy=PolicyName.SF, reference=reference)
+        for reference in (ReferenceMode.ANCHORED, ReferenceMode.CHAINED)
     )
 
 
 def sensitivity_arms(
     lam_grid: tuple[int, ...], alpha_grid: tuple[Fraction, ...]
 ) -> tuple[Arm, ...]:
-    """WQS and HWF at the non-main grid values, chained."""
-    return tuple(
-        Arm(
-            policy=policy,
-            reference=ReferenceMode.CHAINED,
-            lam=lam,
-            alpha=alpha,
-        )
+    """WQS at each lam and HWF at each alpha (the non-main grid values), chained."""
+    wqs = tuple(
+        Arm(policy=PolicyName.WQS, reference=ReferenceMode.CHAINED, lam=lam)
         for lam in lam_grid
-        for alpha in alpha_grid
-        for policy in (PolicyName.WQS, PolicyName.HWF)
     )
+    hwf = tuple(
+        Arm(policy=PolicyName.HWF, reference=ReferenceMode.CHAINED, alpha=alpha)
+        for alpha in alpha_grid
+    )
+    return wqs + hwf
 
 
 def instance_jobs(protocol: Protocol) -> list[InstanceJob]:
