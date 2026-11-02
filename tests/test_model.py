@@ -127,7 +127,12 @@ def _example_sequence() -> Sequence:
 def test_n_cells_is_volunteers_times_shifts(n_volunteers, n_shifts, expected):
     """Testing the expected number of cells"""
     shifts = tuple(make_shift(shift_id=i, period=i) for i in range(n_shifts))
-    volunteers = tuple([make_volunteer(volunteer_id=i) for i in range(n_volunteers)])
+    volunteers = tuple(
+        [
+            make_volunteer(volunteer_id=i, n_periods=2, n_roles=2)
+            for i in range(n_volunteers)
+        ]
+    )
 
     instance = make_instance(
         volunteers=volunteers,
@@ -146,7 +151,7 @@ def test_dataclasses_are_frozen():
     """Assigning an attribute of Instance, Arm, Sequence, Step raises dataclasses.FrozenInstanceError."""
 
     shifts = tuple([make_shift(shift_id=0)])
-    volunteers = tuple([make_volunteer(volunteer_id=0)])
+    volunteers = tuple([make_volunteer(volunteer_id=0, n_roles=2, n_periods=2)])
 
     instance = make_instance(
         volunteers=volunteers,
