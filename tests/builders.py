@@ -1,8 +1,8 @@
-"""Test-only builders, so test bodies stay short. Implement each the first time a test needs it."""
-
 from __future__ import annotations
 
-from typing import Callable, Optional
+from dataclasses import dataclass
+from itertools import product
+from typing import Any, Callable, Optional
 
 from repair.model import (
     Arm,
@@ -106,30 +106,48 @@ def make_instance(
     seed: int = 0,
     under_supplied: bool = False,
 ) -> Instance:
-    """Test builder. Volunteer and shift ids must equal their positions."""
-    volunteers = tuple(volunteers)
-    shifts = tuple(shifts)
-
-    for kind, items in (("volunteer", volunteers), ("shift", shifts)):
-        ids = [id for id, _ in enumerate(items)]
-        if ids != list(range(len(items))):
-            raise ValueError(
-                f"{kind} ids must be 0..{len(items) - 1} in order, got {ids}"
-            )
-
-    for s in shifts:
-        if s.period not in range(n_periods) or s.role not in range(n_roles):
-            raise ValueError(
-                f"shift {s.id}: period {s.period} / role {s.role} out of range"
-            )
-
+    """Test builder. Instance's validator checks ids, periods and roles."""
     meta = InstanceMeta(
         size_class=size_class, scale=scale, seed=seed, under_supplied=under_supplied
     )
     return Instance(
-        volunteers=volunteers,
-        shifts=shifts,
+        volunteers=tuple(volunteers),
+        shifts=tuple(shifts),
         n_periods=n_periods,
         n_roles=n_roles,
         meta=meta,
     )
+
+
+@dataclass(frozen=True)
+class Grid:
+    """The dimensions of a test instance, stated once."""
+
+    n_periods: int = 1
+    n_roles: int = 1
+
+    def volunteer(self, volunteer_id: int, **fields: Any) -> Volunteer:
+        return make_volunteer(
+            volunteer_id, n_periods=self.n_periods, n_roles=self.n_roles, **fields
+        )
+
+    def volunteers(self, n: int) -> list[Volunteer]:
+        """n default volunteers with ids 0..n-1."""
+        return [self.volunteer(i) for i in range(n)]
+
+    def shifts(self, n: int) -> list[Shift]:
+        """n default shifts with ids 0..n-1, each in its own (period, role) slot."""
+        slots = list(product(range(self.n_periods), range(self.n_roles)))
+        if n > len(slots):
+            raise ValueError(f"{n} shifts do not fit into {len(slots)} slots")
+        return [
+            make_shift(i, period=period, role=role)
+            for i, (period, role) in enumerate(slots[:n])
+        ]
+
+    def instance(
+        self, volunteers: Iterable[Volunteer], shifts: Iterable[Shift], **meta: Any
+    ) -> Instance:
+        return make_instance(
+            volunteers, shifts, n_periods=self.n_periods, n_roles=self.n_roles, **meta
+        )

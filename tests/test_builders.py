@@ -1,17 +1,9 @@
-"""tests/builders.py: the helpers every hand fixture is built with.
-
-Assumed API (rename here if yours differs):
-    make_volunteer(id, *, n_periods, n_roles, available=None, skill=None, seniority=0,
-                   cap=10, pref_role=None, pref_time=None) -> Volunteer
-    make_shift(id, *, period=0, role=0, demand=1, min_skill=1, expert=False) -> Shift
-    make_instance(volunteers, shifts, *, n_periods, n_roles, size_class=20, scale=1,
-                  seed=0, under_supplied=False, weights=None) -> Instance
-"""
+"""tests/builders.py: the helpers every hand fixture is built with."""
 
 import pytest
 
 from repair.model import Instance, InstanceMeta, Shift, UtilityWeights, Volunteer
-from tests.builders import make_instance, make_shift, make_volunteer
+from tests.builders import Grid, make_instance, make_shift, make_volunteer
 
 # --- make_volunteer --------------------------------------------------------------
 
@@ -44,7 +36,7 @@ def test_make_volunteer_returns_tuples_and_frozenset():
 def test_make_volunteer_requires_dimensions():
     """n_periods and n_roles have no defaults: a silent default would give wrong-length tuples."""
     with pytest.raises(TypeError):
-        make_volunteer(0)  # type: ignore[call-arg]
+        make_volunteer(0)  # type: ignore[call-arg]  # pylint: disable=missing-kwoa
 
 
 @pytest.mark.parametrize(
@@ -189,3 +181,65 @@ def test_make_instance_is_validated():
     duplicate = [make_shift(0, period=0, role=0), make_shift(1, period=0, role=0)]
     with pytest.raises(ValueError):
         make_instance(volunteers, duplicate, n_periods=2, n_roles=2)
+
+
+@pytest.mark.parametrize(
+    "make_kwargs",
+    [
+        pytest.param(
+            lambda vs: {"volunteers": vs, "shifts": [make_shift(0, period=2)]},
+            id="period_out_of_range",
+        ),
+        pytest.param(
+            lambda vs: {"volunteers": vs, "shifts": [make_shift(0, role=2)]},
+            id="role_out_of_range",
+        ),
+        pytest.param(
+            lambda vs: {"volunteers": vs, "shifts": [make_shift(1)]},
+            id="shift_id_not_position",
+        ),
+        pytest.param(
+            lambda vs: {"volunteers": vs[::-1], "shifts": []},
+            id="volunteer_id_not_position",
+        ),
+    ],
+)
+def test_make_instance_rejects_bad_ids_and_slots(make_kwargs):
+    """With the builder's own checks gone, these still raise through the validator."""
+    volunteers, _ = _two_by_two()
+    with pytest.raises(ValueError):
+        make_instance(**make_kwargs(volunteers), n_periods=2, n_roles=2)
+
+
+# --- Grid ------------------------------------------------------------------------
+
+
+def test_grid_builds_consistent_instance():
+    """Volunteers and shifts take their shape from the grid, and the validator accepts them."""
+    grid = Grid(n_periods=3, n_roles=2)
+    instance = grid.instance(grid.volunteers(2), grid.shifts(4), size_class=40)
+
+    assert (instance.n_periods, instance.n_roles) == (3, 2)
+    assert all(len(v.pref_time) == 3 for v in instance.volunteers)
+    assert all(len(v.skill) == 2 for v in instance.volunteers)
+    assert instance.meta.size_class == 40
+
+
+def test_grid_volunteer_passes_fields_on():
+    v = Grid(n_periods=1, n_roles=2).volunteer(0, skill=(3, 2), pref_role={1: 2})
+    assert (v.skill, v.pref_role) == ((3, 2), (0, 2))
+
+
+def test_grid_shifts_use_distinct_slots():
+    shifts = Grid(n_periods=2, n_roles=2).shifts(4)
+
+    assert [s.id for s in shifts] == [0, 1, 2, 3]
+    assert len({(s.period, s.role) for s in shifts}) == 4
+
+
+def test_grid_shifts_can_fill_exactly_and_no_more():
+    """Asking for too many raises, instead of quietly returning fewer."""
+    grid = Grid(n_periods=2, n_roles=2)
+    assert len(grid.shifts(4)) == 4
+    with pytest.raises(ValueError):
+        grid.shifts(5)

@@ -26,7 +26,7 @@ from repair.model import (
     StageStatus,
     _stable_json,
 )
-from tests.builders import make_instance, make_volunteer, make_shift
+from tests.builders import Grid
 
 # --- helper --------------------------------------------------------------
 
@@ -117,34 +117,22 @@ def _example_sequence() -> Sequence:
 # --- 1.1 model.py --------------------------------------------------------------
 
 
-@pytest.mark.ivo
 @pytest.mark.parametrize(
-    "n_volunteers, n_shifts, expected",
+    "n_volunteers, n_shifts, n_periods, n_roles, expected",
     [
         # 2x2 grid, size_class 40, partial availability: rules out all four wrong formulas
-        (2, 3, 6),
-        (1, 1, 1),
-        (3, 0, 0),
+        (2, 3, 2, 2, 6),
+        (1, 1, 2, 2, 1),
+        (3, 0, 0, 0, 0),
     ],
 )
-def test_n_cells_is_volunteers_times_shifts(n_volunteers, n_shifts, expected):
+def test_n_cells_is_volunteers_times_shifts(
+    n_volunteers, n_shifts, n_periods, n_roles, expected
+):
     """Testing the expected number of cells"""
-    shifts = tuple(make_shift(shift_id=i, period=i) for i in range(n_shifts))
-    volunteers = tuple(
-        [
-            make_volunteer(volunteer_id=i, n_periods=2, n_roles=2)
-            for i in range(n_volunteers)
-        ]
-    )
-
-    instance = make_instance(
-        volunteers=volunteers,
-        shifts=shifts,
-        n_periods=28,
-        n_roles=2,
-        scale=1,
-        size_class=40,
-        seed=0,
+    grid = Grid(n_periods=n_periods, n_roles=n_roles)
+    instance = grid.instance(
+        grid.volunteers(n_volunteers), grid.shifts(n_shifts), size_class=40
     )
 
     assert instance.n_cells == expected
@@ -153,18 +141,8 @@ def test_n_cells_is_volunteers_times_shifts(n_volunteers, n_shifts, expected):
 def test_dataclasses_are_frozen():
     """Assigning an attribute of Instance, Arm, Sequence, Step raises dataclasses.FrozenInstanceError."""
 
-    shifts = tuple([make_shift(shift_id=0)])
-    volunteers = tuple([make_volunteer(volunteer_id=0, n_roles=2, n_periods=2)])
-
-    instance = make_instance(
-        volunteers=volunteers,
-        shifts=shifts,
-        n_periods=28,
-        n_roles=2,
-        scale=1,
-        size_class=40,
-        seed=0,
-    )
+    grid = Grid(n_periods=28, n_roles=2)
+    instance = grid.instance(grid.volunteers(1), grid.shifts(1), size_class=40)
 
     arm = Arm(policy=PolicyName.WQS, reference=ReferenceMode.CHAINED, lam=2)
 
@@ -442,13 +420,12 @@ def test_stable_json_rejects_unknown_types():
 # --- 1.1 validation ---------------------------------------------------------------------
 
 
-@pytest.mark.todo
 def test_valid_instance_accepted():
     """A correct instance constructs, is hashable, and zero shifts are allowed."""
     instance = Instance(**_kwargs())
-    hash(instance)  # fails if a list or set slipped in
-    Instance(**_kwargs(shifts=[]))  # matches the 3 x 0 row of the n_cells test
-    assert False
+    hash(instance)  # all fields are immutable
+    Instance(**_kwargs(shifts=[]))  # matches the 2 x 0 row of the n_cells test
+    assert Instance(**_kwargs(shifts=[])).n_cells == 0
 
 
 @pytest.mark.parametrize(

@@ -165,9 +165,9 @@ class Instance:
                 raise ValueError(
                     f"Volunteer #{volunteer.id}'s skill has the wrong length got {len(volunteer.skill)}, expected {self.n_roles}"
                 )
-            if not len(volunteer.pref_time) == self.n_roles:
+            if not len(volunteer.pref_time) == self.n_periods:
                 raise ValueError(
-                    f"Volunteer #{volunteer.id}'s preffered time has the wrong length got {len(volunteer.pref_time)}, expected {self.n_roles}"
+                    f"Volunteer #{volunteer.id}'s preffered time has the wrong length got {len(volunteer.pref_time)}, expected {self.n_periods}"
                 )
             if not len(volunteer.pref_role) == self.n_roles:
                 raise ValueError(

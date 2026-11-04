@@ -1,11 +1,8 @@
 """tests/expected.py: internal consistency of the hand-derived values.
 
 These tests use no project code except the data types. They check that the sheet's
-numbers agree with each other (keys are schedules, rule names are known, the stated
-optima are the best of the listed rows, and the policy choices follow from U and H),
-so a transcription slip fails here instead of in an oracle test.
-They do NOT prove optimality over all schedules: the written arguments in
-fixtures_sheet.md and, from week 1, the brute force do that.
+numbers agree with each other. Later the Brute Force Solver will prove optimality.
+At this point these are derived by hand.
 """
 
 from fractions import Fraction
