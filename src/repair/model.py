@@ -392,8 +392,10 @@ class LexResult:
 
         certified = “This result is proven correct”: a schedule exists and every stage was solved to proven optimality. It's a yes/no summary that other code relies on.
         """
-        return self.schedule is not None and all(
-            record.status == StageStatus.OPTIMAL for record in self.stages
+        return (
+            self.schedule is not None
+            and len(self.stages) > 0
+            and all(record.status == StageStatus.OPTIMAL for record in self.stages)
         )
 
 

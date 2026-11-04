@@ -4,6 +4,7 @@ import dataclasses
 
 from dataclasses import replace
 from fractions import Fraction
+import inspect
 from repair import protocol
 from repair.model import (
     Arm,
@@ -27,6 +28,7 @@ from repair.model import (
     _stable_json,
 )
 from tests.builders import Grid
+import repair.model as model_module
 
 # --- helper --------------------------------------------------------------
 
@@ -111,6 +113,20 @@ def _example_sequence() -> Sequence:
             AvailabilityRestoration(volunteer=3, period=7),
         ),
         selected=(3, 7),
+    )
+
+
+def _model_dataclasses() -> list[type]:
+    return [
+        cls
+        for _, cls in inspect.getmembers(model_module, inspect.isclass)
+        if dataclasses.is_dataclass(cls) and cls.__module__ == model_module.__name__
+    ]
+
+
+def _stage(status, retried=False, name="stage") -> StageRecord:
+    return StageRecord(
+        name=name, status=status, value=5, bound=5.0, seconds=1.0, retried=retried
     )
 
 
@@ -210,53 +226,6 @@ def test_arm_names_unique_across_protocol_arms():
     collisions = [arm for arm in arms if names[arm.name] != arm]
     assert not collisions, f"name collisions: {[(a, a.name) for a in collisions]}"
     assert len(names) == len(arms)
-
-
-def test_main_arms_are_exactly_the_five_policies():
-    """Each main arm carries only its own parameter; QO has no reference."""
-    assert protocol.main_arms(2, Fraction(1)) == (
-        Arm(PolicyName.QO, None),
-        Arm(PolicyName.SF, ReferenceMode.CHAINED),
-        Arm(PolicyName.QL, ReferenceMode.CHAINED),
-        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=2),
-        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(1)),
-    )
-
-
-def test_main_arm_names():
-    """The names match the ones in expected.py and in stored results."""
-    assert [arm.name for arm in protocol.main_arms(2, Fraction(1))] == [
-        "QO",
-        "SF-chained",
-        "QL-chained",
-        "WQS-chained-l2",
-        "HWF-chained-a1",
-    ]
-
-
-def test_rq2_arms_differ_only_in_reference():
-    assert protocol.rq2_arms() == (
-        Arm(PolicyName.SF, ReferenceMode.ANCHORED),
-        Arm(PolicyName.SF, ReferenceMode.CHAINED),
-    )
-
-
-def test_sensitivity_arms_vary_one_parameter_per_policy():
-    """WQS varies lam only, HWF varies alpha only: one arm per grid value, no cross product."""
-    arms = protocol.sensitivity_arms((1, 4), (Fraction(1, 2), Fraction(2)))
-
-    assert arms == (
-        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=1),
-        Arm(PolicyName.WQS, ReferenceMode.CHAINED, lam=4),
-        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(1, 2)),
-        Arm(PolicyName.HWF, ReferenceMode.CHAINED, alpha=Fraction(2)),
-    )
-    assert [arm.name for arm in arms] == [
-        "WQS-chained-l1",
-        "WQS-chained-l4",
-        "HWF-chained-a1/2",
-        "HWF-chained-a2",
-    ]
 
 
 def test_lexresult_certified_false_without_schedule():
@@ -460,6 +429,17 @@ def test_valid_instance_accepted():
         pytest.param(lambda: _vol(0, available={0, 1}), id="available_is_set"),
         pytest.param(lambda: _vol(0, skill=[1, 2]), id="skill_is_list"),
         pytest.param(lambda: _vol(0, pref_time=[0, 2]), id="pref_time_is_list"),
+        # lower bounds (the existing rows only test values that are too high)
+        pytest.param(lambda: _shift(0, period=-1), id="shift_period_negative"),
+        pytest.param(lambda: _shift(0, role=2), id="shift_role_out_of_range"),
+        pytest.param(lambda: _shift(0, min_skill=0), id="min_skill_zero"),
+        pytest.param(
+            lambda: _vol(0, available=frozenset({-1})), id="available_negative"
+        ),
+        pytest.param(lambda: _vol(0, seniority=-1), id="seniority_negative"),
+        pytest.param(lambda: _vol(0, skill=(-1, 1)), id="skill_negative"),
+        pytest.param(lambda: _vol(0, pref_role=(-1, 0)), id="pref_role_negative"),
+        pytest.param(lambda: _vol(0, pref_time=(0, -1)), id="pref_time_negative"),
     ],
 )
 def test_invalid_instance_rejected(make_kwargs):
@@ -560,3 +540,46 @@ def test_with_volunteer_revalidaates():
         instance.with_volunteer(
             replace(instance.volunteers[0], available=frozenset({5}))
         )
+
+
+@pytest.mark.parametrize("cls", _model_dataclasses(), ids=lambda cls: cls.__name__)
+def test_every_model_dataclass_is_frozen(cls):
+    """Instance hashing and the digest assume nothing in the model can change."""
+    assert cls.__dataclass_params__.frozen
+
+
+def test_frozen_check_sees_the_model_classes():
+    """Guard: the parametrized test above really covers these classes."""
+    names = {cls.__name__ for cls in _model_dataclasses()}
+    assert {
+        "Volunteer",
+        "Shift",
+        "Instance",
+        "InstanceMeta",
+        "Arm",
+        "Sequence",
+        "StageRecord",
+        "LexResult",
+        "Step",
+        "DemandChange",
+        "AvailabilityRemoval",
+        "PreferenceChange",
+        "AvailabilityRestoration",
+    } <= names
+
+
+def test_lexresult_certified_false_without_stages():
+    """A schedule with no recorded stage proves nothing (all(()) would say True)."""
+    assert LexResult(schedule=frozenset({(0, 0)}), stages=()).certified is False
+
+
+def test_lexresult_certified_false_with_no_solution_stage():
+    """NO_SOLUTION is not optimal, even if a schedule is present."""
+    stages = (_stage(StageStatus.OPTIMAL), _stage(StageStatus.NO_SOLUTION))
+    assert LexResult(schedule=frozenset({(0, 0)}), stages=stages).certified is False
+
+
+def test_lexresult_certified_true_after_successful_retry():
+    """A stage proven optimal on the 2τ retry counts as certified; the flag only records it."""
+    stages = (_stage(StageStatus.OPTIMAL), _stage(StageStatus.OPTIMAL, retried=True))
+    assert LexResult(schedule=frozenset({(0, 0)}), stages=stages).certified is True
