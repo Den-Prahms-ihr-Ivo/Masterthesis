@@ -14,49 +14,52 @@ from typing import NamedTuple
 
 from repair.model import AvailabilityRemoval
 
+# every hard-constraint rule key a Row may name
 RULES = frozenset({"unavailable", "two_shifts_same_period", "cap", "min_crew", "skill", "expert"})
 
 
+# the hand-derived values of one schedule on one instance
 class Row(NamedTuple):
     violations: frozenset[str]   # rule keys; empty = feasible
     lam: int                     # Lambda(S)
     u: int                       # U(S)
 
 
+# shorthand: a schedule from its cells
 def _s(*cells: tuple[int, int]) -> frozenset[tuple[int, int]]:
     return frozenset(cells)
 
 
-NONE: frozenset[str] = frozenset()
+NONE: frozenset[str] = frozenset()                        # no violations: the schedule is feasible
 
 # --------------------------------------------------------------------- single_shift
-SINGLE_SHIFT_ROWS = {
+SINGLE_SHIFT_ROWS = {                                     # all 4 schedules; none violates a rule
     _s(): Row(NONE, 1, 0),
     _s((0, 0)): Row(NONE, 0, 6),
     _s((1, 0)): Row(NONE, 0, 3),
     _s((0, 0), (1, 0)): Row(NONE, 0, 5),
 }
-SINGLE_SHIFT_OPTIMUM = _s((0, 0))
+SINGLE_SHIFT_OPTIMUM = _s((0, 0))                         # [MinShortfall, MaxQuality]
 
 # --------------------------------------------------------------------- min_crew
-MIN_CREW_ROWS = {
+MIN_CREW_ROWS = {                                         # all 4 schedules; v1 is never available
     _s(): Row(NONE, 3, 0),
     _s((0, 0)): Row(frozenset({"min_crew"}), 2, 5),
     _s((1, 0)): Row(frozenset({"unavailable", "min_crew"}), 2, 5),
     _s((0, 0), (1, 0)): Row(frozenset({"unavailable"}), 1, 10),
 }
-MIN_CREW_OPTIMUM = _s()
+MIN_CREW_OPTIMUM = _s()                                   # the only feasible schedule
 
-MIN_CREW_BOTH_ROWS = {
+MIN_CREW_BOTH_ROWS = {                                    # the same 4 schedules; v1 available in period 0
     _s(): Row(NONE, 3, 0),
     _s((0, 0)): Row(frozenset({"min_crew"}), 2, 5),
     _s((1, 0)): Row(frozenset({"min_crew"}), 2, 5),
     _s((0, 0), (1, 0)): Row(NONE, 1, 10),
 }
-MIN_CREW_BOTH_OPTIMUM = _s((0, 0), (1, 0))
+MIN_CREW_BOTH_OPTIMUM = _s((0, 0), (1, 0))                # the pair has the lower Lambda
 
 # --------------------------------------------------------------------- expert_shift
-EXPERT_SHIFT_ROWS = {
+EXPERT_SHIFT_ROWS = {                                     # the listed schedules; only v0 can staff expert s0
     _s(): Row(NONE, 2, 0),
     _s((1, 0)): Row(frozenset({"expert"}), 1, 1),
     _s((2, 0)): Row(frozenset({"skill", "expert"}), 1, 0),
@@ -78,12 +81,12 @@ REPAIR_SLICE_ROWS_0 = {                                   # under the initial in
     _s((0, 0), (1, 1), (2, 0), (2, 2)): Row(NONE, 0, 16),
     _s((0, 0), (0, 2), (1, 1)): Row(frozenset({"cap"}), 0, 21),
 }
-REPAIR_SLICE_S0 = _s((0, 0), (1, 1), (2, 2))
+REPAIR_SLICE_S0 = _s((0, 0), (1, 1), (2, 2))              # the unique optimal starting schedule
 REPAIR_SLICE_EVENT = AvailabilityRemoval(pairs=((0, 0),))   # A unavailable in period 0
-REPAIR_SLICE_LAMBDA_STAR_1 = 0
+REPAIR_SLICE_LAMBDA_STAR_1 = 0                            # best shortfall reachable after the event
 
-REPAIR_SLICE_SF = _s((1, 1), (2, 0), (2, 2))
-REPAIR_SLICE_X = _s((0, 2), (1, 1), (2, 0))
+REPAIR_SLICE_SF = _s((1, 1), (2, 0), (2, 2))              # SF*: the unique repair with minimum H = 2
+REPAIR_SLICE_X = _s((0, 2), (1, 1), (2, 0))               # X: the unique repair with maximum U = 16
 REPAIR_SLICE_ROWS_1 = {                                   # under the instance after the event
     REPAIR_SLICE_S0: Row(frozenset({"unavailable"}), 0, 18),
     REPAIR_SLICE_SF: Row(NONE, 0, 13),
@@ -106,5 +109,5 @@ REPAIR_SLICE_CHOICE = {                                   # arm name -> repair a
     "WQS-chained-l4": REPAIR_SLICE_SF,
     "HWF-chained-a1": REPAIR_SLICE_SF,
 }
-REPAIR_SLICE_N_CELLS = 9
-REPAIR_SLICE_SF_CHURN = Fraction(2, 9)
+REPAIR_SLICE_N_CELLS = 9                                  # J = 3 volunteers x 3 shifts
+REPAIR_SLICE_SF_CHURN = Fraction(2, 9)                    # C_1 of the SF repair: H / J
