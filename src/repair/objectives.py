@@ -12,7 +12,7 @@ Objectives are frozen dataclasses, so they are hashable and can be dict keys:
 fixed = {MIN_SHORTFALL: 0} means "Lambda must stay 0".
 """
 
-from __future__ import annotations
+import random
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -44,7 +44,10 @@ def tie_break_ranks(instance: Instance) -> dict[Cell, int]:
 
     Same instance -> same ranks, so the final schedule is reproducible.
     """
-    raise NotImplementedError
+    cells = [(v.id, s.id) for v in instance.volunteers for s in instance.shifts]
+    ranks = list(range(1, len(cells) + 1))  # 1, 2, ..., J
+    random.Random(instance.meta.seed).shuffle(ranks)  # same seed -> same order
+    return dict(zip(cells, ranks))
 
 
 def tie_break(schedule: Schedule, instance: Instance) -> int:
@@ -53,12 +56,15 @@ def tie_break(schedule: Schedule, instance: Instance) -> int:
     The last stage maximizes this. It picks one schedule among those that tie on
     every earlier objective, deterministically and without favouring low ids.
     """
-    raise NotImplementedError
+    ranks = tie_break_ranks(instance)
+    return sum(ranks[cell] for cell in schedule)
 
 
 # ------------------------------------------------------------------ the objectives
 
-MIN_SHORTFALL = Objective("MinShortfall", maximize=False, evaluate=oracle.shortfall)  # Lambda
+MIN_SHORTFALL = Objective(
+    "MinShortfall", maximize=False, evaluate=oracle.shortfall
+)  # Lambda
 MAX_QUALITY = Objective("MaxQuality", maximize=True, evaluate=oracle.quality)  # U
 MAX_TIE_BREAK = Objective("MaxTieBreak", maximize=True, evaluate=tie_break)
 
