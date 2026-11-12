@@ -12,13 +12,9 @@ from repair.expected import (
     NONE,
     SINGLE_SHIFT_ROWS,
 )
-from tests.bruteforce import (
-    MAX_QUALITY,
-    MIN_SHORTFALL,
-    Solution,
-    all_schedules,
-    solve_stage,
-)
+from repair.model import StageResult, StageStatus
+from repair.objectives import MAX_QUALITY, MIN_SHORTFALL
+from tests.bruteforce import all_schedules, solve_stage
 from tests.builders import Grid
 
 
@@ -60,7 +56,7 @@ def test_all_schedules_rejects_large_instances():
 
 def test_maxquality_single_shift(single_shift):
     """[MaxQuality] on single_shift: {(0, 0)}, U = 6."""
-    assert solve_stage(single_shift, MAX_QUALITY) == Solution(frozenset({(0, 0)}), 6)
+    assert solve_stage(single_shift, MAX_QUALITY) == StageResult(frozenset({(0, 0)}), 6)
 
 
 def test_fixed_and_cap_are_respected(expert_shift):
@@ -72,28 +68,28 @@ def test_fixed_and_cap_are_respected(expert_shift):
     coverage = solve_stage(expert_shift, MIN_SHORTFALL)
     assert coverage.value == 0
 
-    assert solve_stage(expert_shift, MAX_QUALITY) == Solution(
+    assert solve_stage(expert_shift, MAX_QUALITY) == StageResult(
         EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY, 7
     )
 
     fixed = solve_stage(
         expert_shift, MAX_QUALITY, fixed={MIN_SHORTFALL: coverage.value}
     )
-    assert fixed == Solution(EXPERT_SHIFT_OPTIMUM, 6)
+    assert fixed == StageResult(EXPERT_SHIFT_OPTIMUM, 6)
 
     # A cap is an upper bound: Lambda <= 0 gives the same result here ...
     capped = solve_stage(expert_shift, MAX_QUALITY, cap={MIN_SHORTFALL: 0})
-    assert capped == Solution(EXPERT_SHIFT_OPTIMUM, 6)
+    assert capped == StageResult(EXPERT_SHIFT_OPTIMUM, 6)
 
     # ... and Lambda <= 1 lets the quality-only optimum through again
     loose = solve_stage(expert_shift, MAX_QUALITY, cap={MIN_SHORTFALL: 1})
-    assert loose == Solution(EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY, 7)
+    assert loose == StageResult(EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY, 7)
 
 
 def test_negative_cap_gives_no_solution(single_shift):
     """Lambda >= 0, so Lambda <= -1 leaves no schedule, not even the empty one."""
-    assert solve_stage(single_shift, MAX_QUALITY, cap={MIN_SHORTFALL: -1}) == Solution(
-        None, None
+    assert solve_stage(single_shift, MAX_QUALITY, cap={MIN_SHORTFALL: -1}) == StageResult(
+        None, None, StageStatus.NO_SOLUTION
     )
 
 
@@ -102,7 +98,7 @@ def test_ties_return_smallest_sorted_schedule():
     grid = Grid(n_periods=1, n_roles=1)
     instance = grid.instance(grid.volunteers(2), grid.shifts(1))
 
-    assert solve_stage(instance, MAX_QUALITY) == Solution(frozenset({(0, 0)}), 1)
+    assert solve_stage(instance, MAX_QUALITY) == StageResult(frozenset({(0, 0)}), 1)
 
     # MinShortfall ties three ways (Lambda = 0); the empty schedule is not among them
-    assert solve_stage(instance, MIN_SHORTFALL) == Solution(frozenset({(0, 0)}), 0)
+    assert solve_stage(instance, MIN_SHORTFALL) == StageResult(frozenset({(0, 0)}), 0)

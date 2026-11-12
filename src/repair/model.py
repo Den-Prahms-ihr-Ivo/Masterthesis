@@ -16,7 +16,7 @@ import json
 from enum import StrEnum
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from fractions import Fraction
-from typing import Union
+from typing import NamedTuple, Union
 
 VolunteerId = int
 ShiftId = int
@@ -367,6 +367,22 @@ class StageRecord:
     bound: float | None  # dual bound at termination
     seconds: float
     retried: bool = False
+
+
+class StageResult(NamedTuple):
+    """What one solver call returns for one stage (milp or brute force).
+
+    The runner turns it into a StageRecord (adding the name, seconds and retried).
+    Examples:
+        StageResult(frozenset({(0, 0)}), 6)                       optimal, U = 6
+        StageResult(s, 3, StageStatus.TIME_LIMIT, bound=6.0)      best found 3, proven <= 6
+        StageResult(None, None, StageStatus.NO_SOLUTION)          nothing found
+    """
+
+    schedule: Schedule | None  # None if no schedule was found
+    value: int | None  # objective value of schedule (the incumbent)
+    status: StageStatus = StageStatus.OPTIMAL
+    bound: float | None = None  # dual bound; None if the solver has none (brute force)
 
 
 @dataclass(frozen=True)
