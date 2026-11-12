@@ -134,7 +134,6 @@ def _two_by_two():
     return volunteers, shifts
 
 
-@pytest.mark.ivo
 def test_make_instance_converts_lists_to_tuples():
     """Lists of volunteers and shifts become tuples; the result is a valid, hashable Instance."""
     volunteers, shifts = _two_by_two()
