@@ -4,20 +4,26 @@ An Objective has three parts:
 - name:     shows up in StageRecord.name, e.g. "MaxQuality"
 - maximize: the direction (True = larger is better, False = smaller is better)
 - evaluate: computes the objective's value for (schedule, instance), via the oracle
+- reference: only for MinDistance, the schedule the distance is measured to (S_{t-1} or S_0)
 
 It is solver-independent. The brute force calls evaluate on every candidate schedule;
 runner.check_oracles calls it to re-check every stage of a solver result.
 
 Objectives are frozen dataclasses, so they are hashable and can be dict keys:
-fixed = {MIN_SHORTFALL: 0} means "Lambda must stay 0".
+fixed = {MIN_SHORTFALL: 0} means "Lambda must stay 0". Equality ignores evaluate, so
+min_distance(S0) == min_distance(S0) although each call builds a new function.
+
+milp.solve_stage builds the linear objective from name (and reference); it never calls
+evaluate. That keeps the MILP independent of the oracle.
 """
 
 import random
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import oracle
+from repair import metrics
 from repair.model import Cell, Instance, Schedule
 
 
@@ -25,7 +31,8 @@ from repair.model import Cell, Instance, Schedule
 class Objective:
     name: str  # matches StageRecord.name, e.g. "MaxQuality"
     maximize: bool  # True: larger is better (U); False: smaller is better (Lambda)
-    evaluate: Callable[[Schedule, Instance], int]  # e.g. oracle.quality
+    evaluate: Callable[[Schedule, Instance], int] = field(compare=False)  # e.g. oracle.quality
+    reference: Schedule | None = None  # MinDistance only
 
     def not_worse(self, value: int, bound: int) -> bool:
         """value is at least as good as bound: >= when maximizing, <= when minimizing.
@@ -70,3 +77,15 @@ MAX_TIE_BREAK = Objective("MaxTieBreak", maximize=True, evaluate=tie_break)
 
 # the starting schedule S0: best coverage, then best quality, then the tie-break
 S0_SPECS = (MIN_SHORTFALL, MAX_QUALITY, MAX_TIE_BREAK)
+
+
+def min_distance(reference: Schedule) -> Objective:
+    """MinDistance: H(S, reference) = |S xor reference|, the number of changed cells.
+
+    The SF policy minimizes it with reference S_{t-1} (chained) or S_0 (anchored).
+    """
+
+    def evaluate(schedule: Schedule, instance: Instance) -> int:
+        return metrics.distance(schedule, reference)
+
+    return Objective("MinDistance", maximize=False, evaluate=evaluate, reference=reference)

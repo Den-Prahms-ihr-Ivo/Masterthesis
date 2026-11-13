@@ -28,6 +28,8 @@ import pytest
 import oracle
 
 from repair.expected import REPAIR_SLICE_S0, MIN_CREW_BOTH_OPTIMUM
+from repair.model import PreferenceChange
+from repair.perturbations import apply_event
 from dataclasses import replace
 from tests.builders import Grid, make_shift
 
@@ -321,10 +323,41 @@ def test_surplus_contribution():
 # --- 2.3 needs apply_event -----------------------------------------------------
 
 
-@pytest.mark.todo
-def test_preference_change_moves_quality_by_2_or_4():
-    """After a PreferenceChange, U of an unchanged schedule moves by +-2 or +-4 per affected assignment."""
-    pytest.fail("write this test")
+# C works two role-0 shifts (s0 and s2) here, so a change in C's role-0 preference counts twice
+_C_TWICE = frozenset({(0, 0), (1, 1), (2, 0), (2, 2)})
+
+
+@pytest.mark.parametrize(
+    "schedule, volunteer, role, new, expected_delta",
+    [
+        (
+            REPAIR_SLICE_S0,
+            1,
+            1,
+            0,
+            -4,
+        ),  # B on s1 (role 1): p_role 2 -> 0, one assignment
+        (REPAIR_SLICE_S0, 1, 1, 1, -2),  # B: 2 -> 1
+        (REPAIR_SLICE_S0, 2, 0, 2, +2),  # C on s2 (role 0): 1 -> 2
+        (REPAIR_SLICE_S0, 0, 0, 0, -4),  # A on s0 (role 0): 2 -> 0
+        (REPAIR_SLICE_S0, 0, 1, 2, 0),  # A works no role-1 shift: U unchanged
+        (_C_TWICE, 2, 0, 2, +4),  # C on s0 and s2: +2 per assignment
+    ],
+)
+def test_preference_change_moves_quality_by_2_or_4(
+    repair_slice, schedule, volunteer, role, new, expected_delta
+):
+    """After a PreferenceChange, U of an unchanged schedule moves by +-2 or +-4 per affected assignment.
+
+    u_ws = 2 * p_role + p_time + k, so a change of p_role by +-1 or +-2 moves u by
+    +-2 or +-4 for every shift of that volunteer in that role; nothing else in U changes.
+    """
+    after = apply_event(
+        repair_slice, PreferenceChange(changes=((volunteer, role, new),))
+    )
+
+    delta = oracle.quality(schedule, after) - oracle.quality(schedule, repair_slice)
+    assert delta == expected_delta
 
 
 # --- 2.4 property test ---------------------------------------------------------
