@@ -16,7 +16,14 @@ from dataclasses import dataclass, field, fields
 from fractions import Fraction
 from pathlib import Path
 
-from repair.model import Arm, SequenceKind, UtilityWeights, PolicyName, ReferenceMode
+from repair.model import (
+    Arm,
+    PolicyName,
+    ReferenceMode,
+    SequenceKind,
+    SequenceProfile,
+    UtilityWeights,
+)
 
 
 @dataclass(frozen=True)
@@ -288,9 +295,41 @@ def sensitivity_arms(
     return wqs + hwf
 
 
+# The three main-cell profiles, in matrix order (rq2 has its own profile).
+MAIN_PROFILES = (
+    SequenceProfile.BALANCED,
+    SequenceProfile.AVAILABILITY,
+    SequenceProfile.PREFERENCE,
+)
+
+
+def _validate_job_inputs(protocol: Protocol) -> None:
+    unknown = set(protocol.cells) - set(CELLS)
+    if unknown:
+        raise ValueError(f"unknown cells: {sorted(unknown)}")
+
+    if "robustness" in protocol.cells:
+        if protocol.robustness_scale is None:
+            raise ValueError("robustness_scale missing")
+
+        if protocol.n_instances_secondary > protocol.n_instances.get(40, 0):
+            raise ValueError("n_instances_secondary exceeds n_instances[40]")
+
+    if "undersupplied" in protocol.cells:
+        if protocol.workforce_factor is None:
+            raise ValueError("workforce_factor missing")
+
+
 def instance_jobs(protocol: Protocol) -> list[InstanceJob]:
-    """Every base instance the protocol needs, in a fixed order (make_instances.py)."""
-    raise NotImplementedError
+    """Every base instance the protocol needs, in a fixed order (make_instances.py).
+
+    Order: main instances by size class, then index; the under-supplied instances
+    InstanceJob(40, i, under_supplied=True), i < n_instances_secondary, last (only if
+    "undersupplied" is a cell). Exactly the set {job.instance for job in jobs(protocol)},
+    no duplicates. Robustness builds nothing extra: it reuses main n = 40 instances.
+    """
+    # dict.fromkeys drops duplicates but keeps the first-seen order (a set would not).
+    return list(dict.fromkeys(job.instance for job in jobs(protocol)))
 
 
 def jobs(protocol: Protocol) -> list[Job]:
@@ -302,10 +341,152 @@ def jobs(protocol: Protocol) -> list[Job]:
     rq2           size_classes x N_I x 1, kind "rq2", rq2_arms
     robustness    n=40, N_secondary instances, balanced, kind "independent", robustness_scale
     undersupplied n=40 demand class, under_supplied=True, N_secondary, balanced, k=2
+
+    Details the tests pin down:
+    - cells in CELLS order, only those in protocol.cells; loops nested in the order above
+      (size class -> instance -> profile -> sequence)
+    - scale k: main n // 20; rq2 rq2_background_scale or n // 20; robustness
+      robustness_scale; undersupplied 2
+    - rq2: one sequence per instance, sequence_index 0, profile "rq2"
+    - robustness: main instances InstanceJob(40, i), i < N_secondary, N_Q sequences each,
+      main_arms; undersupplied: kind "rq1", N_Q sequences each, main_arms
+    - ValueError if a listed cell lacks its calibrated value (robustness_scale,
+      workforce_factor) or N_secondary > N_I[40] while "robustness" is listed
     """
-    raise NotImplementedError
+    _validate_job_inputs(protocol)
+
+    result: list[Job] = []
+
+    main = main_arms(protocol.lam, protocol.alpha)
+    sensitivity = sensitivity_arms(protocol.lam_grid, protocol.alpha_grid)
+    rq2 = rq2_arms()
+
+    def add(
+        cell: str,
+        instance: InstanceJob,
+        kind: SequenceKind,
+        profile: str,
+        sequence_index: int,
+        arms: tuple[Arm, ...],
+        scale: int,
+    ) -> None:
+        result.append(
+            Job(
+                cell=cell,
+                instance=instance,
+                kind=kind,
+                profile=profile,
+                sequence_index=sequence_index,
+                arms=arms,
+                scale=scale,
+            )
+        )
+
+    for cell in CELLS:
+        if cell not in protocol.cells:
+            continue
+
+        if cell == "main":
+            for size in protocol.size_classes:
+                for i in range(protocol.n_instances[size]):
+                    instance = InstanceJob(size, i)
+
+                    for profile in MAIN_PROFILES:
+                        arms = main
+
+                        include_sensitivity = (
+                            size == 40
+                            and profile == SequenceProfile.BALANCED
+                            and (
+                                protocol.sensitivity_instances is None
+                                or i < protocol.sensitivity_instances
+                            )
+                        )
+
+                        if include_sensitivity:
+                            arms = main + sensitivity
+
+                        for q in range(protocol.n_sequences):
+                            add(
+                                cell=cell,
+                                instance=instance,
+                                kind=SequenceKind.RQ1,
+                                profile=profile,
+                                sequence_index=q,
+                                arms=arms,
+                                scale=size // 20,
+                            )
+
+        elif cell == "rq2":
+            for size in protocol.size_classes:
+                scale = (
+                    size // 20
+                    if protocol.rq2_background_scale is None
+                    else protocol.rq2_background_scale
+                )
+
+                for i in range(protocol.n_instances[size]):
+                    add(
+                        cell=cell,
+                        instance=InstanceJob(size, i),
+                        kind=SequenceKind.RQ2,
+                        profile=SequenceProfile.RQ2,
+                        sequence_index=0,
+                        arms=rq2,
+                        scale=scale,
+                    )
+
+        elif cell == "robustness":
+            robustness_scale = protocol.robustness_scale
+            assert robustness_scale is not None  # checked by _validate_job_inputs
+
+            for i in range(protocol.n_instances_secondary):
+                instance = InstanceJob(40, i)
+
+                for q in range(protocol.n_sequences):
+                    add(
+                        cell=cell,
+                        instance=instance,
+                        kind=SequenceKind.INDEPENDENT,
+                        profile=SequenceProfile.BALANCED,
+                        sequence_index=q,
+                        arms=main,
+                        scale=robustness_scale,
+                    )
+
+        elif cell == "undersupplied":
+            for i in range(protocol.n_instances_secondary):
+                instance = InstanceJob(
+                    size_class=40,
+                    index=i,
+                    under_supplied=True,
+                )
+
+                for q in range(protocol.n_sequences):
+                    add(
+                        cell=cell,
+                        instance=instance,
+                        kind=SequenceKind.RQ1,
+                        profile=SequenceProfile.BALANCED,
+                        sequence_index=q,
+                        arms=main,
+                        scale=2,
+                    )
+
+    return result
 
 
 def shard(all_jobs: list[Job], index: int, count: int) -> list[Job]:
-    """all_jobs[index::count]; 0 <= index < count."""
-    raise NotImplementedError
+    """all_jobs[index::count]; 0 <= index < count.
+
+    One shard per cluster task (e.g. SLURM_ARRAY_TASK_ID of SLURM_ARRAY_TASK_COUNT).
+    Strided, so every shard mixes cells and size classes. Raises ValueError for
+    count <= 0 or index outside 0..count-1 (a negative index would slice silently).
+    """
+    if count <= 0:
+        raise ValueError("shard count must be positive")
+
+    if not 0 <= index < count:
+        raise ValueError("shard index must satisfy 0 <= index < count")
+
+    return all_jobs[index::count]
