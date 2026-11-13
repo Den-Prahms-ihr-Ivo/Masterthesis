@@ -256,6 +256,7 @@ class AvailabilityRemoval:
     """P2: a_wp := 0 for each (volunteer, period)."""
 
     pairs: tuple[tuple[VolunteerId, int], ...]
+    fallback: bool = False  # True if fewer than k targets were eligible (13.9: topped up)
 
 
 @dataclass(frozen=True)
@@ -263,6 +264,7 @@ class PreferenceChange:
     """P3: p^role_wr := new value for each (volunteer, role, new_value)."""
 
     changes: tuple[tuple[VolunteerId, int, int], ...]
+    fallback: bool = False  # True if fewer than k targets were eligible (13.9: topped up)
 
 
 @dataclass(frozen=True)

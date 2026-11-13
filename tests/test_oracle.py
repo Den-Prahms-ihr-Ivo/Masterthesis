@@ -28,10 +28,18 @@ import pytest
 import oracle
 
 from repair.expected import REPAIR_SLICE_S0, MIN_CREW_BOTH_OPTIMUM
-from repair.model import PreferenceChange
-from repair.perturbations import apply_event
+from repair.generator import generate_instance
+from repair.model import PreferenceChange, SequenceProfile
+from repair.perturbations import (
+    PROFILES,
+    apply_event,
+    instances_along,
+    rq1_sequence,
+    rq2_sequence,
+)
+from repair.protocol import GeneratorConfig
 from dataclasses import replace
-from tests.builders import Grid, make_shift
+from tests.builders import Grid, greedy_schedule, make_shift
 
 # --- 1.3 oracle.py: independence -----------------------------------------------
 
@@ -363,7 +371,28 @@ def test_preference_change_moves_quality_by_2_or_4(
 # --- 2.4 property test ---------------------------------------------------------
 
 
-@pytest.mark.todo
 def test_all_cancelled_feasible_after_every_event():
-    """★ For 200 generated n=20 sequences, frozenset() is feasible for every step instance."""
-    pytest.fail("write this test")
+    """★ For 200 generated n=20 sequences, frozenset() is feasible for every step instance.
+
+    Exposé 4.8: cancelling every shift is always a feasible repair, so a repair stage can
+    never be infeasible. 40 instances x 5 sequence types (the three RQ1 profiles,
+    independent targeting, RQ2) cover every event type, both P1 fallbacks and the RQ2
+    restoration. S0 is a solver-free stand-in: it only steers which cells are targeted.
+    """
+    checked = 0
+
+    for i in range(40):
+        instance = generate_instance(GeneratorConfig(), 20, i)
+        s0 = greedy_schedule(instance, seed=i)
+        sequences = [
+            *(rq1_sequence(instance, s0, profile, i) for profile in PROFILES),
+            rq1_sequence(instance, s0, SequenceProfile.BALANCED, i, targeting="independent"),
+            rq2_sequence(instance, s0, i),
+        ]
+
+        for seq in sequences:
+            for t, after in enumerate(instances_along(instance, seq.events), start=1):
+                assert oracle.violations(frozenset(), after) == [], (i, seq.kind, seq.profile, t)
+            checked += 1
+
+    assert checked == 200

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Any, Callable, Optional
 
+import numpy as np
+
 from repair.model import (
     Arm,
     Instance,
@@ -151,3 +153,27 @@ class Grid:
         return make_instance(
             volunteers, shifts, n_periods=self.n_periods, n_roles=self.n_roles, **meta
         )
+
+
+def greedy_schedule(instance: Instance, seed: int = 0) -> Schedule:
+    """A stand-in for S0 without the solver: per shift, up to d_s available volunteers
+    in random order, at most one shift per volunteer and period.
+
+    Not optimal and not necessarily feasible (caps, skills and min crew are ignored).
+    Use it only where a test needs "some S0-like set of cells", e.g. for the samplers,
+    which only read which cells S0 contains.
+    """
+    rng = np.random.default_rng(seed)
+    busy: set[tuple[int, int]] = set()
+    cells: set[tuple[int, int]] = set()
+    for shift in instance.shifts:
+        crew = [
+            int(w)
+            for w in rng.permutation(len(instance.volunteers))
+            if shift.period in instance.volunteers[w].available
+            and (int(w), shift.period) not in busy
+        ][: shift.demand]
+        for w in crew:
+            busy.add((w, shift.period))
+            cells.add((w, shift.id))
+    return frozenset(cells)

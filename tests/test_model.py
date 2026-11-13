@@ -354,7 +354,9 @@ def test_digest_pinned():
     (field order, JSON settings, Fraction formatting, a renamed event class),
     old and new results no longer match. This test makes such a change loud.
     """
-    EXAMPLE_DIGEST = "704dbdbadf2253b4f40558b6310dff4e700ec76b17105ae0c8462fe51cc56b91"
+    # 2026-11-13: changed on purpose, `fallback` added to AvailabilityRemoval and
+    # PreferenceChange (open choice 13.9). No stored results existed yet.
+    EXAMPLE_DIGEST = "297e5471244d1ea5165f382b431f56cd6a869219df2781b54468825fa31e9eda"
 
     assert _example_sequence().digest() == EXAMPLE_DIGEST
 
@@ -368,6 +370,7 @@ def test_digest_input_is_canonical_json():
     assert payload["events"][0] == {
         "__type__": "AvailabilityRemoval",
         "pairs": [[3, 7]],
+        "fallback": False,
     }
 
 
