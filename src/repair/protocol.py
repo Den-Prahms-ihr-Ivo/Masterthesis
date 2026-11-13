@@ -48,7 +48,7 @@ class GeneratorConfig:
 @dataclass(frozen=True)
 class SolverSettings:
     time_limit: float  # tau per stage, seconds (600 in the exposé)
-    s0_time_limit: float  # TODO: IVO Design Decision
+    s0_time_limit: float
     seed: int = 0  # SCIP randomization seed shift
     threads: int = 1
     retry_factor: float = 2.0  # one retry with factor * tau
