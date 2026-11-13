@@ -1,0 +1,41 @@
+# Pilot protocol: small counts, used to calibrate the values main.toml needs.
+# NUMBERS ONLY. Which cells and arms exist is fixed in protocol.py (exposé).
+#
+# TOML has no fractions and no null:
+# - fractions are strings: alpha = "1", alpha_grid = ["1/2", "2"]
+# - an optional value is left out to mean "not set" (None)
+#
+# The counts below are placeholders: set them to what the pilot needs.
+
+name = "pilot"
+date = ""            # the pilot is never frozen
+root_seed = 20261109 # must differ from main.toml's root_seed
+
+horizon = 15         # T
+size_classes = [20, 40, 80]
+cells = ["main", "rq2", "robustness", "undersupplied"]
+
+n_instances_secondary = 2
+n_sequences = 2      # N_Q
+
+lam = 2              # main WQS value
+alpha = "1"          # main HWF value
+lam_grid = [1, 4]
+alpha_grid = ["1/2", "2"]
+
+# Calibrated in the pilot, so not set here:
+# sensitivity_instances, robustness_scale, rq2_background_scale, workforce_factor
+
+[n_instances]        # N_I per size class (keys are strings in TOML)
+20 = 2
+40 = 2
+80 = 2
+
+[solver]
+time_limit = 60.0    # tau per stage, seconds
+s0_time_limit = 60.0
+seed = 0
+threads = 1
+retry_factor = 2.0
+
+# [generator] may override any GeneratorConfig field; left out = exposé defaults (Table A1)

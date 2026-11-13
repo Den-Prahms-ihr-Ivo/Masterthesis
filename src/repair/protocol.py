@@ -8,10 +8,11 @@ the git commit in the manifest freeze the whole design.
 This module and storage.py are the only src/ modules that read files.
 """
 
-from __future__ import annotations
+import hashlib
+import json
 
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from fractions import Fraction
 from pathlib import Path
 
@@ -97,19 +98,160 @@ class Job:
     scale: int  # perturbation scale k for this job
 
 
+SEED_LIMIT = 2**63  # derive_seed returns 0 <= seed < SEED_LIMIT
+
+# Protocol fields that may be left out of the TOML; missing -> None.
+OPTIONAL_KEYS = (
+    "sensitivity_instances",
+    "robustness_scale",
+    "rq2_background_scale",
+    "workforce_factor",
+)
+
+
+def _tuples(value):
+    """TOML arrays -> tuples, also nested ([[3, 7], [10, 16]] -> ((3, 7), (10, 16)))."""
+    if isinstance(value, list):
+        return tuple(_tuples(item) for item in value)
+    return value
+
+
+def _validate_frozen(protocol: Protocol) -> None:
+    if not protocol.date:
+        raise ValueError("date is empty")
+
+    if protocol.n_sequences <= 0:
+        raise ValueError("n_sequences must be positive")
+
+    for size_class in protocol.size_classes:
+        if size_class not in protocol.n_instances:
+            raise ValueError(f"n_instances[{size_class}] missing")
+
+        if protocol.n_instances[size_class] <= 0:
+            raise ValueError(f"n_instances[{size_class}] must be positive")
+
+    has_robustness = "robustness" in protocol.cells
+    has_undersupplied = "undersupplied" in protocol.cells
+
+    if has_robustness or has_undersupplied:
+        if protocol.n_instances_secondary <= 0:
+            raise ValueError(
+                "n_instances_secondary must be positive "
+                "for robustness or undersupplied"
+            )
+
+    # "is None or <= 0": the template's placeholder 0 must not count as calibrated.
+    if has_robustness and (
+        protocol.robustness_scale is None or protocol.robustness_scale <= 0
+    ):
+        raise ValueError("robustness_scale missing or not positive")
+
+    if has_undersupplied and (
+        protocol.workforce_factor is None or protocol.workforce_factor <= 0
+    ):
+        raise ValueError("workforce_factor missing or not positive")
+
+    has_sensitivity = "main" in protocol.cells and bool(
+        protocol.lam_grid or protocol.alpha_grid
+    )
+
+    needs_40 = has_sensitivity or has_robustness or has_undersupplied
+
+    if needs_40 and 40 not in protocol.size_classes:
+        raise ValueError(
+            "size class 40 is required for sensitivity, " "robustness, or undersupplied"
+        )
+
+
 def load_protocol(path: Path, require_frozen: bool = False) -> Protocol:
-    """Parse a protocol TOML file. Fractions are given as strings ("1/2").
+    """Parse a protocol TOML file (format: see protocol/pilot.toml).
+
+    Conversions, because TOML has no fractions, int keys, tuples or null:
+    - alpha and alpha_grid are strings ("1", "1/2") -> Fraction
+    - [n_instances] keys are strings ("20") -> int
+    - arrays -> tuples (also inside [generator], e.g. availability_ranges)
+    - a missing optional key -> None (sensitivity_instances, robustness_scale,
+      rq2_background_scale, workforce_factor); a missing [generator] -> GeneratorConfig()
+    An unknown key raises ValueError (a typo must not silently fall back to a default).
 
     require_frozen=True (main run) raises ValueError if `date` is empty, any needed
-    count is 0, or a calibrated value needed by a listed cell is missing.
+    count is 0, or a calibrated value needed by a listed cell is missing:
+    "robustness" needs robustness_scale, "undersupplied" needs workforce_factor.
     Also raises if 40 is not in size_classes while the sensitivity arms, "robustness" or
     "undersupplied" need the n = 40 main instances.
     """
-    raise NotImplementedError
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+
+    allowed = {field.name for field in fields(Protocol) if field.init}
+
+    unknown = raw.keys() - allowed
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown protocol keys: {names}")
+
+    # Convert serialized representations into domain types.
+    if "alpha" in raw:
+        raw["alpha"] = Fraction(raw["alpha"])
+
+    if "alpha_grid" in raw:
+        raw["alpha_grid"] = tuple(Fraction(value) for value in raw["alpha_grid"])
+
+    for name in ("size_classes", "cells", "lam_grid"):
+        if name in raw:
+            raw[name] = tuple(raw[name])
+
+    if "n_instances" in raw:
+        raw["n_instances"] = {
+            int(size_class): count for size_class, count in raw["n_instances"].items()
+        }
+
+    # Optional values: left out of the TOML -> None.
+    for name in OPTIONAL_KEYS:
+        raw.setdefault(name, None)
+
+    if "solver" not in raw:
+        raise ValueError("solver table missing")
+    try:
+        raw["solver"] = SolverSettings(**raw["solver"])
+    except TypeError as exc:
+        raise ValueError(f"invalid solver settings: {exc}") from exc
+
+    try:
+        generator = {
+            name: _tuples(value) for name, value in raw.get("generator", {}).items()
+        }
+        if "weights" in generator:
+            generator["weights"] = UtilityWeights(**generator["weights"])
+        raw["generator"] = GeneratorConfig(**generator)
+    except TypeError as exc:
+        raise ValueError(f"invalid generator settings: {exc}") from exc
+
+    try:
+        protocol = Protocol(**raw)
+    except TypeError as exc:
+        raise ValueError(f"invalid protocol: {exc}") from exc
+
+    if require_frozen:
+        _validate_frozen(protocol)
+
+    return protocol
 
 
-def derive_seed(root: int, *keys: object) -> int:
-    raise NotImplementedError
+def derive_seed(root: int, *keys: str | int) -> int:
+    """A seed for one purpose, derived from the protocol's root seed and a key path.
+
+    Example: derive_seed(protocol.root_seed, "instance", 40, 3) seeds instance 3 of
+    size class 40. Every random draw in the study gets its seed this way, so a single
+    root_seed reproduces everything and no two purposes share a seed.
+
+    Deterministic across runs and machines (no hash(): it is salted per process).
+    Sensitive to the root, the order of the keys and their types ("1" != 1).
+    Returns 0 <= seed < SEED_LIMIT.
+    """
+    data = json.dumps([root, *keys]).encode("utf-8")
+    digest = hashlib.sha256(data).digest()
+
+    return int.from_bytes(digest[:8], "big") % SEED_LIMIT
 
 
 def main_arms(lam: int, alpha: Fraction) -> tuple[Arm, ...]:

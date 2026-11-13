@@ -1,0 +1,39 @@
+# Main protocol TEMPLATE. Fill in after the pilot, set `date`, commit: that freezes the design.
+# load_protocol(..., require_frozen=True) refuses this file until every value below is filled:
+# - an empty date -> must be the ISO date of freezing
+# - every count = 0 -> must be > 0
+# - the calibrated values (commented out) -> must be set for the cells that need them
+
+name = "main"
+date = ""
+root_seed = 20261201 # chosen in advance; must differ from pilot.toml's root_seed
+
+horizon = 15
+size_classes = [20, 40, 80]
+cells = ["main", "rq2", "robustness", "undersupplied"]
+
+n_instances_secondary = 0
+n_sequences = 0
+
+lam = 2
+alpha = "1"
+lam_grid = [1, 4]
+alpha_grid = ["1/2", "2"]
+
+# Calibrated in the pilot:
+# robustness_scale = 0      # needed by "robustness"
+# workforce_factor = 0.0    # needed by "undersupplied"
+# rq2_background_scale = 0  # optional: left out -> k = n/20
+# sensitivity_instances = 0 # optional: left out -> all main n = 40 instances
+
+[n_instances]
+20 = 0
+40 = 0
+80 = 0
+
+[solver]
+time_limit = 600.0
+s0_time_limit = 600.0
+seed = 0
+threads = 1
+retry_factor = 2.0
