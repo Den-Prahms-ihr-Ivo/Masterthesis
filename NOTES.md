@@ -25,3 +25,10 @@
 
   Rejections are rare, so the coverage acceptance barely filters the main classes. Not
   yet measured: the under-supplied class (needs a calibrated phi).
+- **Gate M2: passed.** `scripts/m2_gate.py`, pilot.toml, n = 20, instance index 0
+  (accepted at the first draw, S0 certified). SCIP 10.0.2 / PySCIPOpt 6.3.0, Apple M1,
+  tau = 60 s; 37 s in total. One balanced RQ1 sequence through QO, SF, QL, WQS(2),
+  HWF(1) (all chained) and one RQ2 sequence through SF-anchored and SF-chained: every
+  arm ran all 15 steps, every step certified, no retries, Lambda = Lambda*_t throughout
+  (RQ1: Lambda* = 0 at every step; RQ2: Lambda* = 1 at steps 4-5), both result files
+  round-trip. Also covered by `test_m2_gate_n20_sequences_with_scip` (slow, solver).
