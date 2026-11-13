@@ -21,6 +21,11 @@ Retry: a stage that returns no schedule is retried once with retry_factor * time
 (StageRecord.retried = True). If the retry also finds nothing, the solve stops: the
 later stages never run and LexResult.schedule is None.
 
+Base instances (step 2.5)
+-------------------------
+accept_instance draws candidates until one passes the coverage check (exposé 4.3);
+initial_schedule computes its published schedule S0 = the S0_SPECS solve.
+
 Oracle check
 ------------
 check_oracles re-computes every recorded stage value with the oracle (via
@@ -38,7 +43,9 @@ from typing import Protocol
 
 import oracle
 
+from repair.generator import generate_instance
 from repair.model import (
+    AcceptanceLog,
     Instance,
     LexResult,
     Schedule,
@@ -46,7 +53,8 @@ from repair.model import (
     StageRecord,
     StageStatus,
 )
-from repair.objectives import Objective
+from repair.objectives import MIN_SHORTFALL, S0_SPECS, Objective
+from repair.protocol import GeneratorConfig, SolverSettings, derive_seed
 
 
 class StageSolver(Protocol):
@@ -205,5 +213,149 @@ def check_oracles(
         if stage.status == StageStatus.OPTIMAL and actual != claimed:
             raise OracleMismatch(f"value: {detail}")
 
-        if stage.status == StageStatus.TIME_LIMIT and not spec.not_worse(actual, claimed):
+        if stage.status == StageStatus.TIME_LIMIT and not spec.not_worse(
+            actual, claimed
+        ):
             raise OracleMismatch(f"cap: {detail} (worse than the unproven incumbent)")
+
+
+# --- base instances (exposé 4.3) -------------------------------------------------
+
+
+class AcceptanceFailed(Exception):
+    """The base seed and every reserve seed failed max_draws candidates each."""
+
+
+def candidate_seed(seed: int, draw: int) -> int:
+    """Seed of candidate `draw` (0-based) for `seed`: draw 0 is the seed itself, so
+    most accepted instances have used_seed == base_seed; later draws are
+    derive_seed(seed, "redraw", draw)."""
+    if draw < 0:
+        raise ValueError("draw must be nonnegative")
+
+    if draw == 0:
+        return seed
+
+    return derive_seed(seed, "redraw", draw)
+
+
+def accept_instance(
+    cfg: GeneratorConfig,
+    size_class: int,
+    base_seed: int,
+    reserve: Sequence[int],
+    settings: SolverSettings,
+    solve: StageSolver,
+    *,
+    max_draws: int = 100,
+    under_supplied: bool = False,
+) -> tuple[Instance, AcceptanceLog]:
+    """Draw candidates until one is accepted; return it and how it was found.
+
+    Coverage check per candidate: solve_lexicographic(candidate, [MIN_SHORTFALL], solve,
+    time_limit=settings.time_limit, retry_factor=settings.retry_factor), giving Lambda*_0.
+
+    Main classes: accept iff Lambda*_0 == 0. The status does not matter here: Lambda >= 0,
+        so an incumbent of 0 is optimal even after a timeout. No schedule -> rejected.
+        Candidates: candidate_seed(base_seed, 0..max_draws-1); then the same for
+        reserve[0], reserve[1], ... (replaced=True). All failed -> AcceptanceFailed.
+    Under-supplied (under_supplied=True): accept the first candidate and record its
+        Lambda*_0 (exposé 4.3: never rejected for coverage). No schedule -> ValueError.
+
+    reserve: the reserve seeds of THIS base seed only (the caller derives them, e.g.
+    derive_seed(root, "reserve", size_class, index, j)), so two base instances can never
+    end up with the same reserve seed. Never mutated.
+
+    AcceptanceLog: base_seed as given; used_seed = the accepted candidate's seed
+    (= instance.meta.seed); draws and rejected counted over all seeds tried;
+    lambda_star_0 of the accepted candidate.
+
+    No oracle check here: initial_schedule re-solves MinShortfall as its first stage and
+    check_oracles verifies that value, so a wrong Lambda*_0 = 0 cannot get through.
+    """
+    if max_draws <= 0:
+        raise ValueError("max_draws must be positive")
+
+    draws = 0
+    rejected = 0
+    coverage_specs = (MIN_SHORTFALL,)
+
+    seeds = (base_seed, *reserve)
+
+    for seed_index, seed in enumerate(seeds):
+        for draw in range(max_draws):
+            used_seed = candidate_seed(seed, draw)
+
+            candidate = generate_instance(
+                cfg,
+                size_class,
+                used_seed,
+                under_supplied=under_supplied,
+            )
+            draws += 1
+
+            result = solve_lexicographic(
+                candidate,
+                coverage_specs,
+                solve,
+                time_limit=settings.time_limit,
+                retry_factor=settings.retry_factor,
+            )
+
+            if result.schedule is None:
+                if under_supplied:
+                    raise ValueError(
+                        "under-supplied coverage solve returned no schedule "
+                        f"after retry; candidate seed {used_seed}"
+                    )
+
+                rejected += 1
+                continue
+
+            # Lambda*_0 is the solver's recorded value. No oracle check here: S0 re-solves
+            # MinShortfall as its first stage, and initial_schedule's check_oracles
+            # verifies that value, so a wrong 0 is caught there (see the docstring).
+            shortfall = result.stages[-1].value
+            assert shortfall is not None  # a stage with a schedule records its value
+
+            if under_supplied or shortfall == 0:
+                log = AcceptanceLog(
+                    base_seed=base_seed,
+                    used_seed=used_seed,
+                    draws=draws,
+                    rejected=rejected,
+                    replaced=seed_index > 0,
+                    lambda_star_0=shortfall,
+                )
+
+                return candidate, log
+
+            rejected += 1
+
+    raise AcceptanceFailed(
+        f"base seed {base_seed}: no acceptable instance after "
+        f"{draws} candidates across {len(seeds)} seed families "
+        f"({max_draws} draws per family)"
+    )
+
+
+def initial_schedule(
+    instance: Instance, settings: SolverSettings, solve: StageSolver
+) -> LexResult:
+    """S0: solve_lexicographic(instance, S0_SPECS, solve, time_limit=settings.s0_time_limit,
+    retry_factor=settings.retry_factor), then check_oracles (raises OracleMismatch).
+
+    The result may be uncertified (a stage hit its time limit): the caller
+    (make_instances) must then replace the instance, because S0 has to be optimal.
+    """
+    result = solve_lexicographic(
+        instance,
+        S0_SPECS,
+        solve,
+        time_limit=settings.s0_time_limit,
+        retry_factor=settings.retry_factor,
+    )
+
+    check_oracles(instance, S0_SPECS, result)
+
+    return result

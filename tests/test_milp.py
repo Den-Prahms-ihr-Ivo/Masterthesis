@@ -11,6 +11,7 @@ import pytest
 
 import oracle
 from repair import milp
+from repair.generator import generate_instance
 from repair.expected import (
     EXPERT_SHIFT_OPTIMUM,
     EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY,
@@ -20,7 +21,14 @@ from repair.expected import (
     REPAIR_SLICE_X,
 )
 from repair.model import StageResult, StageStatus
-from repair.objectives import MAX_QUALITY, MIN_SHORTFALL, S0_SPECS, min_distance
+from repair.objectives import (
+    MAX_QUALITY,
+    MAX_TIE_BREAK,
+    MIN_SHORTFALL,
+    S0_SPECS,
+    min_distance,
+)
+from repair.protocol import GeneratorConfig
 from repair.runner import solve_lexicographic
 from tests import bruteforce
 
@@ -198,6 +206,35 @@ def test_three_runs_identical(repair_slice):
 
     assert len({run.schedule for run in runs}) == 1
     assert len({tuple(r.value for r in run.stages) for run in runs}) == 1
+
+
+def test_milp_timeout_status():
+    """A stage stopped by its time limit reports time_limit with a usable incumbent.
+
+    Generated n = 80, tie-break stage with Lambda and U fixed, warm-started from the
+    MaxQuality solution. The roadmap says tau = 1 s, but this machine solves every
+    n = 80 stage within 1 s (tie-break: ~0.5 s); 0.05 s with a warm start stopped with
+    time_limit in every probe. The incumbent must be feasible, keep the fixed values,
+    have its claimed value, and lie below the dual bound (maximisation).
+    """
+    instance = generate_instance(GeneratorConfig(), 80, 0)
+    quality = milp.solve_stage(
+        instance, MAX_QUALITY, fixed={MIN_SHORTFALL: 0}, cap={}, start=None, time_limit=60
+    )
+    assert quality.status == StageStatus.OPTIMAL and quality.value is not None
+    fixed = {MIN_SHORTFALL: 0, MAX_QUALITY: quality.value}
+
+    got = milp.solve_stage(
+        instance, MAX_TIE_BREAK, fixed=fixed, cap={}, start=quality.schedule, time_limit=0.05
+    )
+
+    assert got.status == StageStatus.TIME_LIMIT
+    assert got.schedule is not None and got.value is not None and got.bound is not None
+    assert oracle.is_feasible(got.schedule, instance)
+    assert oracle.shortfall(got.schedule, instance) == 0
+    assert oracle.quality(got.schedule, instance) == quality.value
+    assert MAX_TIE_BREAK.evaluate(got.schedule, instance) == got.value
+    assert got.value <= got.bound
 
 
 def test_negative_cap_no_solution(single_shift):
