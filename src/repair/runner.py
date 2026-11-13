@@ -39,21 +39,31 @@ so this module never imports a specific solver.
 import time
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 import oracle
 
+from repair import metrics
 from repair.generator import generate_instance
 from repair.model import (
     AcceptanceLog,
+    Arm,
+    CoverageStep,
     Instance,
     LexResult,
     Schedule,
     StageResult,
     StageRecord,
     StageStatus,
+    Sequence as EventSequence,
+    SequenceResult,
+    Step,
+    Trajectory,
 )
-from repair.objectives import MIN_SHORTFALL, S0_SPECS, Objective
+from repair.objectives import MAX_TIE_BREAK, MIN_SHORTFALL, S0_SPECS, Objective
+from repair.perturbations import instances_along
+from repair.policies import policy_stages, reference_for
 from repair.protocol import GeneratorConfig, SolverSettings, derive_seed
 
 
@@ -91,6 +101,8 @@ class OracleMismatch(Exception):
         "infeasible:"  the final schedule breaks a hard constraint
         "value:"       an optimal stage recorded a value the oracle does not compute
         "cap:"         an unproven (time_limit) stage got worse than its recorded incumbent
+        "coverage:"    a repair schedule exceeds the shared coverage cap Lambda*_t
+                       (raised by run_arm, not by check_oracles)
     """
 
 
@@ -102,6 +114,7 @@ def solve_lexicographic(
     time_limit: float,
     retry_factor: float = 2.0,
     start: Schedule | None = None,
+    base_cap: Mapping[Objective, int] | None = None,
 ) -> LexResult:
     """Solve the stages in specs one after another (see the module docstring).
 
@@ -111,15 +124,16 @@ def solve_lexicographic(
         time_limit:   seconds per stage (a retry gets time_limit * retry_factor)
         retry_factor: SolverSettings.retry_factor, 2.0 in the exposé
         start:        start schedule for the first stage, e.g. S_{t-1}
+        base_cap:     caps that hold for EVERY stage from the start, e.g. the shared
+                      coverage cap {MIN_SHORTFALL: Lambda*_t} of a repair step (3.3).
+                      Copied, never mutated; later time_limit stages add to the copy.
 
     Returns a LexResult with one StageRecord per stage that ran (seconds measured
     around the solver call) and the last stage's schedule; schedule is None if a
     stage failed twice.
     """
     fixed: dict[Objective, int] = {}  # earlier optimal stages: value must stay ==
-    cap: dict[Objective, int] = (
-        {}
-    )  # earlier time_limit stages: value must not get worse
+    cap: dict[Objective, int] = dict(base_cap) if base_cap is not None else {}
     records: list[StageRecord] = []
 
     for objective in specs:
@@ -263,15 +277,17 @@ def accept_instance(
         Lambda*_0 (exposé 4.3: never rejected for coverage). No schedule -> ValueError.
 
     reserve: the reserve seeds of THIS base seed only (the caller derives them, e.g.
-    derive_seed(root, "reserve", size_class, index, j)), so two base instances can never
-    end up with the same reserve seed. Never mutated.
+    derive_seed(root, "reserve", size_class, index, j)). These separate purposes;
+    finite-range seed collisions must still be checked by the protocol tests.
+    Never mutated.
 
     AcceptanceLog: base_seed as given; used_seed = the accepted candidate's seed
     (= instance.meta.seed); draws and rejected counted over all seeds tried;
     lambda_star_0 of the accepted candidate.
 
-    No oracle check here: initial_schedule re-solves MinShortfall as its first stage and
-    check_oracles verifies that value, so a wrong Lambda*_0 = 0 cannot get through.
+    Validate the acceptance solve itself with the oracle. A later S0 solve cannot
+    validate an earlier acceptance decision. Use the schedule's actual shortfall
+    for acceptance and logging; an unproven incumbent is not necessarily optimal.
     """
     if max_draws <= 0:
         raise ValueError("max_draws must be positive")
@@ -359,3 +375,169 @@ def initial_schedule(
     check_oracles(instance, S0_SPECS, result)
 
     return result
+
+
+# --- arms (step 3.3) -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SharedCoverage:
+    """The coverage stage of every repair step, solved once and shared by all arms."""
+
+    steps: tuple[CoverageStep, ...]  # Lambda*_t and its stage record, t = 1..T
+    starts: tuple[
+        Schedule, ...
+    ]  # the coverage schedule per step: every arm's warm start
+
+
+def shared_coverage(
+    instances_t: list[Instance], settings: SolverSettings, solve: StageSolver
+) -> SharedCoverage:
+    """Per step t: solve_lexicographic(instance_t, [MIN_SHORTFALL], solve,
+    time_limit=settings.time_limit, retry_factor=settings.retry_factor,
+    start=frozenset()) and check_oracles.
+
+    A solve without a schedule after retry raises RuntimeError: the runner needs a
+    shared coverage incumbent to continue. A time_limit result is kept as it is:
+    its incumbent becomes the cap Lambda*_t and the record says "time_limit".
+    """
+    steps: list[CoverageStep] = []
+    starts: list[Schedule] = []
+    specs = (MIN_SHORTFALL,)
+
+    for t, instance in enumerate(instances_t, start=1):
+        result = solve_lexicographic(
+            instance,
+            specs,
+            solve,
+            time_limit=settings.time_limit,
+            retry_factor=settings.retry_factor,
+            start=frozenset(),
+        )
+        if result.schedule is None:
+            raise RuntimeError(f"shared coverage at step {t}: no schedule after retry")
+
+        check_oracles(instance, specs, result)
+        record = result.stages[0]
+        assert record.value is not None
+        steps.append(CoverageStep(t=t, lambda_star=record.value, record=record))
+        starts.append(result.schedule)
+
+    return SharedCoverage(steps=tuple(steps), starts=tuple(starts))
+
+
+def run_arm(
+    arm: Arm,
+    instances_t: list[Instance],
+    s0: Schedule,
+    coverage: SharedCoverage,
+    settings: SolverSettings,
+    solve: StageSolver,
+) -> Trajectory:
+    """Steps 1..T for one arm. The arm keeps its own previous schedule (S_0 = s0) and
+    burden b_w (all 0 at the start).
+
+    Per step t (1-based; instance_t = instances_t[t - 1]):
+    1. reference = reference_for(arm, s0, previous)
+    2. specs = policy_stages(arm, reference, burden, instance_t) + (MAX_TIE_BREAK,)
+    3. solve_lexicographic(instance_t, specs, solve, time_limit=settings.time_limit,
+       retry_factor=settings.retry_factor, start=coverage.starts[t - 1],
+       base_cap={MIN_SHORTFALL: Lambda*_t})
+    4. no schedule -> Trajectory(arm, steps so far, ended_early=True), stop
+    5. check_oracles(instance_t, specs, result); then oracle.shortfall(S_t) <= Lambda*_t,
+       else OracleMismatch("coverage: ...")
+    6. Step(t, S_t, result.stages); burden[w] += 1 for w in metrics.affected(previous, S_t)
+    """
+    if len(coverage.steps) != len(instances_t) or len(coverage.starts) != len(
+        instances_t
+    ):
+        raise ValueError("coverage must have one step and start per instance")
+
+    if not instances_t:
+        return Trajectory(arm=arm, steps=(), ended_early=False)
+
+    previous = s0
+    burden = {
+        v.id: 0 for v in instances_t[0].volunteers
+    }  # b_{w,t-1}, volunteer -> count
+    steps: list[Step] = []
+
+    for t, instance in enumerate(instances_t, start=1):
+        coverage_step = coverage.steps[t - 1]
+        if coverage_step.t != t:
+            raise ValueError(
+                f"coverage step {coverage_step.t} is out of order; expected {t}"
+            )
+
+        reference = reference_for(arm, s0, previous)
+        # Snapshot the history before this repair; this step's burden is added below.
+        specs = tuple(policy_stages(arm, reference, dict(burden), instance)) + (
+            MAX_TIE_BREAK,
+        )
+        result = solve_lexicographic(
+            instance,
+            specs,
+            solve,
+            time_limit=settings.time_limit,
+            retry_factor=settings.retry_factor,
+            start=coverage.starts[t - 1],
+            base_cap={MIN_SHORTFALL: coverage_step.lambda_star},
+        )
+
+        if result.schedule is None:
+            return Trajectory(arm=arm, steps=tuple(steps), ended_early=True)
+
+        check_oracles(instance, specs, result)
+        shortfall = MIN_SHORTFALL.evaluate(result.schedule, instance)
+        if shortfall > coverage_step.lambda_star:
+            raise OracleMismatch(
+                f"coverage: arm {arm.name}, step {t}: shortfall {shortfall} "
+                f"exceeds shared cap {coverage_step.lambda_star}"
+            )
+
+        steps.append(Step(t=t, schedule=result.schedule, stages=result.stages))
+        for w in metrics.affected(previous, result.schedule):
+            burden[w] += 1
+        previous = result.schedule
+
+    return Trajectory(arm=arm, steps=tuple(steps), ended_early=False)
+
+
+def run_sequence(
+    cell: str,
+    instance: Instance,
+    acceptance: AcceptanceLog,
+    s0_result: LexResult,
+    sequence: EventSequence,
+    arms: Sequence[Arm],
+    settings: SolverSettings,
+    solve: StageSolver,
+    manifest: dict,
+) -> SequenceResult:
+    """One sequence for all arms: instances_along(instance, sequence.events) ONCE ->
+    shared_coverage -> run_arm per arm, in the given order -> SequenceResult.
+
+    Every arm and the coverage stage receive the very same instance objects.
+    ValueError if s0_result is not certified (S0 must be optimal).
+    """
+    if s0_result.schedule is None or not s0_result.certified:
+        raise ValueError("S0 must have a schedule and be certified")
+
+    instances_t = instances_along(instance, sequence.events)
+    coverage = shared_coverage(instances_t, settings, solve)
+    trajectories = tuple(
+        run_arm(arm, instances_t, s0_result.schedule, coverage, settings, solve)
+        for arm in arms
+    )
+
+    return SequenceResult(
+        cell=cell,
+        instance=instance,
+        acceptance=acceptance,
+        sequence=sequence,
+        s0=s0_result.schedule,
+        s0_stages=s0_result.stages,
+        coverage=coverage.steps,
+        trajectories=trajectories,
+        manifest=dict(manifest),
+    )

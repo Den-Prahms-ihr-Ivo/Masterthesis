@@ -27,6 +27,9 @@ Objectives (dispatched on Objective.name):
     MinDistance  H = |reference| + sum_{c not in ref} x_c - sum_{c in ref, available} x_c
                  The constant |reference| also counts reference cells that are now
                  unavailable (no variable): they always count as changed.
+    MinDistance with weights (HWF): the same with weight w_w per cell of volunteer w,
+                 constant sum_{(w, s) in ref} w_w
+    MaxQualityMinusDistance (WQS): U - lam * H
 
 fixed: objective expression == v.  cap: expression not worse than v (<= or >=).
 start: handed to SCIP with addSol; SCIP checks it and drops it if infeasible.
@@ -211,6 +214,42 @@ def _distance(m: _Model, reference: Schedule) -> pyscipopt.Expr:
     return removed + added
 
 
+def _weighted_distance(
+    m: _Model,
+    reference: Schedule,
+    weights: Mapping[int, int],
+) -> pyscipopt.Expr:
+    """Weighted assignment distance, including unavailable reference cells."""
+    required = {w for w, _ in reference} | {w for w, _ in m.x}
+    missing = required - weights.keys()
+    if missing:
+        raise ValueError(f"missing distance weights for volunteers {sorted(missing)}")
+
+    constant = sum(weights[w] for w, _ in reference)
+
+    retained = quicksum(
+        weights[w] * variable for (w, s), variable in m.x.items() if (w, s) in reference
+    )
+
+    added = quicksum(
+        weights[w] * variable
+        for (w, s), variable in m.x.items()
+        if (w, s) not in reference
+    )
+
+    return constant - retained + added
+
+
+def _quality_minus_distance(
+    m: _Model,
+    instance: Instance,
+    reference: Schedule,
+    lam: int,
+) -> pyscipopt.Expr:
+    """WQS: utility minus lam times unweighted assignment distance."""
+    return _quality(m, instance) - lam * _distance(m, reference)
+
+
 def _expression(m, instance, objective):
     """Build the expression corresponding to an objective specification."""
     if objective.name == "MaxQuality":
@@ -224,7 +263,14 @@ def _expression(m, instance, objective):
 
     if objective.name == "MinDistance":
         assert objective.reference is not None
+        weights = objective.weight_map()
+        if weights is not None:
+            return _weighted_distance(m, objective.reference, weights)
         return _distance(m, objective.reference)
+
+    if objective.name == "MaxQualityMinusDistance":
+        assert objective.reference is not None and objective.lam is not None
+        return _quality_minus_distance(m, instance, objective.reference, objective.lam)
 
     raise ValueError(f"unknown objective {objective.name!r}")
 

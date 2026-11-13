@@ -16,6 +16,7 @@ from repair.expected import (
     EXPERT_SHIFT_OPTIMUM,
     EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY,
     REPAIR_SLICE_DISTANCE,
+    REPAIR_SLICE_EVENT,
     REPAIR_SLICE_S0,
     REPAIR_SLICE_SF,
     REPAIR_SLICE_X,
@@ -26,8 +27,10 @@ from repair.objectives import (
     MAX_TIE_BREAK,
     MIN_SHORTFALL,
     S0_SPECS,
+    max_quality_minus_distance,
     min_distance,
 )
+from repair.perturbations import apply_event
 from repair.protocol import GeneratorConfig
 from repair.runner import solve_lexicographic
 from tests import bruteforce
@@ -122,6 +125,97 @@ def test_fixing_is_exact(repair_slice):
     assert got.schedule is not None
     assert oracle.quality(got.schedule, repair_slice) == 18
     assert got.schedule == REPAIR_SLICE_S0  # the only schedule with U = 18
+
+
+# --- weighted MinDistance and WQS (step 3.1) -------------------------------------
+
+
+def _references(instance):
+    """References that pull the solver in different directions: the S0 optimum, the
+    empty schedule (H = |S|) and every cell (H = J - |S|, partly infeasible)."""
+    s0 = solve_lexicographic(instance, S0_SPECS, bruteforce.solve_stage, time_limit=10)
+    every_cell = frozenset(
+        (v.id, s.id) for v in instance.volunteers for s in instance.shifts
+    )
+    assert s0.schedule is not None
+    return [s0.schedule, frozenset(), every_cell]
+
+
+def _weights(instance):
+    """Distinct weights 1, 3, 5, ... so a cell counted for the wrong volunteer shows."""
+    return {v.id: 1 + 2 * v.id for v in instance.volunteers}
+
+
+@pytest.mark.parametrize("fixture_name", FIXTURES)
+def test_weighted_distance_matches_bruteforce(request, fixture_name):
+    """★ Weighted H agrees with the oracle, alone and under the coverage cap."""
+    instance = request.getfixturevalue(fixture_name)
+    lambda_star = _brute(instance, MIN_SHORTFALL).value
+    assert lambda_star is not None
+
+    for reference in _references(instance):
+        objective = min_distance(reference, weights=_weights(instance))
+        _assert_matches_bruteforce(instance, objective)
+        _assert_matches_bruteforce(instance, objective, cap={MIN_SHORTFALL: lambda_star})
+
+
+def test_weighted_distance_counts_unavailable_reference_cells(repair_slice):
+    """(A, s0) in S0 is unavailable after the event and has no variable: its weight
+    still counts (the constant term), like in the unweighted case."""
+    after = apply_event(repair_slice, REPAIR_SLICE_EVENT)
+    objective = min_distance(REPAIR_SLICE_S0, weights={0: 7, 1: 1, 2: 2})
+
+    got = _assert_matches_bruteforce(after, objective)
+    assert got.value is not None and got.value >= 7
+
+
+@pytest.mark.parametrize("lam", [1, 2, 4])
+@pytest.mark.parametrize("fixture_name", FIXTURES)
+def test_wqs_matches_bruteforce_for_lambda_1_2_4(request, fixture_name, lam):
+    """★ U - lam * H agrees with the oracle for every reference, also under the cap."""
+    instance = request.getfixturevalue(fixture_name)
+    lambda_star = _brute(instance, MIN_SHORTFALL).value
+    assert lambda_star is not None
+
+    for reference in _references(instance):
+        objective = max_quality_minus_distance(reference, lam)
+        _assert_matches_bruteforce(instance, objective)
+        _assert_matches_bruteforce(instance, objective, cap={MIN_SHORTFALL: lambda_star})
+
+
+@pytest.mark.parametrize(
+    "lam, value, schedule",
+    [
+        pytest.param(1, 12, REPAIR_SLICE_X, id="lam1_X"),  # 16 - 1 * 4
+        pytest.param(2, 9, REPAIR_SLICE_SF, id="lam2_SF"),  # 13 - 2 * 2
+        pytest.param(4, 5, REPAIR_SLICE_SF, id="lam4_SF"),  # 13 - 4 * 2
+    ],
+)
+def test_wqs_after_event_value_sheet(repair_slice, lam, value, schedule):
+    """After the event, reference S0, under the coverage cap Lambda <= 0 (as in a real
+    repair step): the unique WQS optimum is the value sheet's choice. Without the cap,
+    lam = 4 would rather cancel s0 (value 6)."""
+    after = apply_event(repair_slice, REPAIR_SLICE_EVENT)
+    objective = max_quality_minus_distance(REPAIR_SLICE_S0, lam)
+
+    got = _assert_matches_bruteforce(after, objective, cap={MIN_SHORTFALL: 0})
+    assert (got.value, got.schedule) == (value, schedule)
+
+
+@pytest.mark.parametrize("fixture_name", FIXTURES)
+def test_fixing_wqs_and_weighted_distance_is_exact(request, fixture_name):
+    """A later stage with a WQS or weighted-H value fixed: the fixing constraint uses the
+    same expression, so the tie-break optimum matches the brute force."""
+    instance = request.getfixturevalue(fixture_name)
+    reference = _references(instance)[0]
+
+    for objective in (
+        max_quality_minus_distance(reference, 2),
+        min_distance(reference, weights=_weights(instance)),
+    ):
+        best = _brute(instance, objective).value
+        assert best is not None
+        _assert_matches_bruteforce(instance, MAX_TIE_BREAK, fixed={objective: best})
 
 
 # --- lexicographic -------------------------------------------------------------
