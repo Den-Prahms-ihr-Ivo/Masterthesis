@@ -1,11 +1,11 @@
-"""tests/builders.py: the helpers every hand fixture is built with."""
+"""Check the fixture builders before relying on them in the other tests."""
 
 import pytest
 
 from repair.model import Instance, InstanceMeta, Shift, UtilityWeights, Volunteer
 from tests.builders import Grid, make_instance, make_shift, make_volunteer
 
-# --- make_volunteer --------------------------------------------------------------
+# Make_volunteer
 
 
 def test_make_volunteer_defaults():
@@ -103,7 +103,7 @@ def test_available_is_converted_to_frozenset(given):
     )
 
 
-# --- make_shift ------------------------------------------------------------------
+# Make_shift
 
 
 def test_make_shift_defaults():
@@ -125,7 +125,7 @@ def test_make_shift_explicit_values():
     assert (s.period, s.role, s.demand, s.min_skill, s.expert) == (1, 1, 3, 2, True)
 
 
-# --- make_instance ---------------------------------------------------------------
+# Make_instance
 
 
 def _two_by_two():
@@ -210,7 +210,7 @@ def test_make_instance_rejects_bad_ids_and_slots(make_kwargs):
         make_instance(**make_kwargs(volunteers), n_periods=2, n_roles=2)
 
 
-# --- Grid ------------------------------------------------------------------------
+# Grid
 
 
 def test_grid_builds_consistent_instance():

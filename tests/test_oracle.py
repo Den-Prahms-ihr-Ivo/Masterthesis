@@ -7,7 +7,7 @@ Feasibility
     ceil(d/2); no assignee with skill >= kappa; expert shift without skill 3.
 - min_crew: 1->1, 2->1, 3->2, 4->2, 5->3, 6->3.
 - Below d_s but at or above ceil(d_s/2) is feasible (soft coverage); overstaffing is feasible.
-- ★ Property (seeded loop over generated instances and sequences): the all-cancelled
+- Property (seeded loop over generated instances and sequences): the all-cancelled
   schedule stays feasible after every event (exposé 4.8).
 
 Quality and coverage
@@ -21,8 +21,8 @@ Quality and coverage
   assignment in the changed (w, r) (exposé 4.4).
 """
 
-### ORDER:
-### DOC STRING -> is_feasible → assignment_utility → surplus → mentored → quality → shortfall.
+# Reading order for the calculations:
+# feasibility, assignment utility, surplus, mentoring, quality, shortfall.
 import pytest
 
 import oracle
@@ -41,13 +41,14 @@ from repair.protocol import GeneratorConfig
 from dataclasses import replace
 from tests.builders import Grid, greedy_schedule, make_shift
 
-# --- 1.3 oracle.py: independence -----------------------------------------------
+# 1.3 oracle.py: independence
 
+# These independence tests are currently commented out; they do not run.
 # FORBIDDEN_MODULES = {"milp", "objectives"}
 
 
 # def _forbidden_imports(source: str) -> set[str]:
-#     """Oracle must not import MILP and rather solve everything by brute force."""
+#     """Find solver/objective imports; the oracle should only evaluate schedules."""
 #     imported: set[str] = set()
 #     for node in ast.walk(ast.parse(source)):
 #         if isinstance(node, ast.Import):
@@ -88,7 +89,7 @@ from tests.builders import Grid, greedy_schedule, make_shift
 #     assert _forbidden_imports(source) == set()
 
 
-# --- 1.3 oracle.py: feasibility ------------------------------------------------
+# 1.3 oracle.py: feasibility
 
 
 @pytest.mark.parametrize(
@@ -199,7 +200,7 @@ def test_violation_no_skilled_assignee_checks_the_shifts_role():
 def test_violation_expert_missing(expert_shift):
     """An open expert shift without a skill-3 assignee gives exactly one violation."""
 
-    # Volunteer 1 working alone on shift 0 with not a high eough skill level
+    # Volunteer 1 works alone on shift 0 without the required expert skill.
     broken_schedule = frozenset({(1, 0)})
 
     found = oracle.violations(broken_schedule, expert_shift)
@@ -226,7 +227,7 @@ def test_overstaffing_is_feasible(single_shift):
     assert not oracle.violations(schedule, single_shift)
 
 
-# --- 1.3 oracle.py: quality and shortfall --------------------------------------
+# 1.3 oracle.py: quality and shortfall
 
 
 @pytest.mark.parametrize(
@@ -328,7 +329,7 @@ def test_surplus_contribution():
     assert oracle.quality(schedule, instance) - utility == 5 * 2 - 10 * 3
 
 
-# --- 2.3 needs apply_event -----------------------------------------------------
+# 2.3 needs apply_event
 
 
 # C works two role-0 shifts (s0 and s2) here, so a change in C's role-0 preference counts twice
@@ -368,11 +369,11 @@ def test_preference_change_moves_quality_by_2_or_4(
     assert delta == expected_delta
 
 
-# --- 2.4 property test ---------------------------------------------------------
+# 2.4 property test
 
 
 def test_all_cancelled_feasible_after_every_event():
-    """★ For 200 generated n=20 sequences, frozenset() is feasible for every step instance.
+    """For 200 generated n=20 sequences, frozenset() is feasible for every step instance.
 
     Exposé 4.8: cancelling every shift is always a feasible repair, so a repair stage can
     never be infeasible. 40 instances x 5 sequence types (the three RQ1 profiles,

@@ -1,8 +1,8 @@
-"""Vertical slice: one full repair step on repair_slice, end to end.
+"""Follow one complete repair step on the hand-calculated repair_slice.
 
-repair_slice -> S0 -> AvailabilityRemoval -> SF repair (stages written out by hand) -> C_1.
-Every expected value comes from the value sheet (repair.expected). Runs once with the
-brute force and once with SCIP; both must give the same answer.
+Solve S0, remove A's availability, run the SF stages and calculate C_1.
+Run this once with brute force and once with SCIP. Both should agree with
+repair.expected, so the test also checks how the parts work together.
 """
 
 from fractions import Fraction

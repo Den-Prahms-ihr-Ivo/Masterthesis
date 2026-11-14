@@ -1,3 +1,10 @@
+"""Build small instances with readable defaults for the tests.
+
+Most tests change only the fields involved in their rule. These helpers
+fill the rest, but still construct real Instance objects and run their
+validation. They should not bypass checks just to make a fixture pass.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,7 +34,7 @@ def _dense(
     what: str,
     axis: str,
 ) -> tuple[int, ...]:
-    """None -> all default; Mapping -> sparse overrides; Sequence -> taken as-is."""
+    """Fill defaults, apply sparse index overrides, or keep a supplied full sequence."""
     if values is None:
         return (default,) * n
     if isinstance(values, Mapping):
@@ -108,7 +115,7 @@ def make_instance(
     seed: int = 0,
     under_supplied: bool = False,
 ) -> Instance:
-    """Test builder. Instance's validator checks ids, periods and roles."""
+    """Build a test instance and let Instance validate its ids, periods and roles."""
     meta = InstanceMeta(
         size_class=size_class, scale=scale, seed=seed, under_supplied=under_supplied
     )
@@ -123,7 +130,7 @@ def make_instance(
 
 @dataclass(frozen=True)
 class Grid:
-    """The dimensions of a test instance, stated once."""
+    """Keep test dimensions together so volunteers and shifts use the same shape."""
 
     n_periods: int = 1
     n_roles: int = 1
@@ -156,12 +163,12 @@ class Grid:
 
 
 def greedy_schedule(instance: Instance, seed: int = 0) -> Schedule:
-    """A stand-in for S0 without the solver: per shift, up to d_s available volunteers
-    in random order, at most one shift per volunteer and period.
+    """Build an S0-like set of cells for sampler tests without using a solver.
 
-    Not optimal and not necessarily feasible (caps, skills and min crew are ignored).
-    Use it only where a test needs "some S0-like set of cells", e.g. for the samplers,
-    which only read which cells S0 contains.
+    Pick available volunteers in random order, up to each shift's demand,
+    without assigning someone twice in a period. Caps, skills and minimum crew
+    are ignored, so the result is not necessarily feasible or optimal. Use it
+    only in tests that need assignment targets, not a valid solved schedule.
     """
     rng = np.random.default_rng(seed)
     busy: set[tuple[int, int]] = set()

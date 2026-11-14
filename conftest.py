@@ -1,3 +1,10 @@
+"""Small scheduling examples shared by the tests.
+
+The tables show the inputs and hand-calculated values. They are kept small
+enough to check on paper and enumerate with the brute-force solver. See
+tests/fixture_value_sheet.md for the full calculation of the repair example.
+"""
+
 import pytest
 
 from tests.builders import Grid, make_shift
@@ -21,7 +28,8 @@ def single_shift():
     | {(v1,s0)}         | none       | 0   | 3   | 0      | 0   | 0    | 3   |
     | {(v0,s0),(v1,s0)} | none       | 0   | 9   | 1      | 5   | −10  | 5   |
 
-    **Optimum** [MinShortfall, MaxQuality]: {(v0,s0)}, Λ = 0, U = 6."""
+    **Optimum** [MinShortfall, MaxQuality]: {(v0,s0)}, Λ = 0, U = 6.
+    """
     grid = Grid(n_periods=1, n_roles=1)
     volunteers = [
         grid.volunteer(0, skill=(1,), pref_role=(2,), pref_time=(1,)),
@@ -60,9 +68,7 @@ def min_crew():
 
 @pytest.fixture
 def min_crew_both_available():
-    """
-
-    ### Variant `min_crew_both_available` (v1 available in {0})
+    """### Variant `min_crew_both_available` (v1 available in {0})
 
     | Schedule          | Violations | Λ   | U   |
     | ----------------- | ---------- | --- | --- |
@@ -73,7 +79,8 @@ def min_crew_both_available():
 
     **Optimum:** {(v0,s0),(v1,s0)}, Λ = 1, U = 10.
 
-    _Argument:_ only {} and the pair are feasible (a single person is below the minimum crew), and the pair has the lower Λ.
+    Only the empty schedule and the pair are feasible. One person is below the
+    minimum crew, and the pair has less shortfall than the empty schedule.
     """
     grid = Grid(n_periods=1, n_roles=1)
 
@@ -89,7 +96,7 @@ def min_crew_both_available():
 def expert_shift():
     """Two shifts in one period; s0 is expert-flagged and only v0 can staff it.
 
-    Value sheet (fixtures_sheet.md §3):
+    Value sheet (tests/fixture_value_sheet.md §3):
 
         u-table       s0 (r0, expert)   s1 (r1)
         v0                 4               7
@@ -114,8 +121,7 @@ def expert_shift():
 
 @pytest.fixture
 def repair_slice():
-    """
-    n_periods = 2, n_roles = 2. All volunteers: available {0, 1}, seniority 0. Ids: A = v0, B = v1, C = v2.
+    """n_periods = 2, n_roles = 2. All volunteers: available {0, 1}, seniority 0. Ids: A = v0, B = v1, C = v2.
 
     |     | skill (r0, r1) | pref_role (r0, r1) | pref_time (p0, p1) | cap   | u(s0) | u(s1) | u(s2) |
     | --- | -------------- | ------------------ | ------------------ | ----- | ----- | ----- | ----- |
@@ -125,7 +131,7 @@ def repair_slice():
 
     Shifts (all d = 1, κ = 1, no expert): s0 = (p0, r0), s1 = (p0, r1), s2 = (p1, r0). J = 3 · 3 = 9.
 
-    Returns only the initial stage.
+    Return the base instance before the availability-removal event.
     """
     grid = Grid(n_periods=2, n_roles=2)
     volunteers = [

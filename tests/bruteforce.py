@@ -1,17 +1,16 @@
-"""Brute force: the reference solver for small instances.
+"""Solve very small test instances by trying every possible schedule.
 
-Enumerates every subset of cells, keeps the feasible ones (oracle.is_feasible) and
-picks the best by plain comparison. Shares no code with milp: it is the reference
-the MILP is checked against, so it is checked against the hand values first.
+Check each subset of assignment cells with the oracle, then compare the
+feasible schedules directly. I use this as a reference for the MILP, after
+checking it against the hand-calculated fixture values.
 
-One stage optimizes one objective. Earlier stages enter as constraints on other
-objectives' values:
-- fixed: value == v (an earlier stage held at its optimum);
-- cap:   value not worse than v (<= when minimizing, >= when maximizing).
-Ties go to the smallest schedule as a sorted tuple of cells, so results are deterministic.
+A stage optimises one objective. Earlier optimal values are fixed with ==;
+unproven values enter as caps (<= when minimising, >= when maximising).
+Equal objective values are resolved by the smallest sorted schedule tuple.
 
-solve_stage has the runner's StageSolver signature, so it can be passed as
-solve=bruteforce.solve_stage to runner.solve_lexicographic.
+The function signature matches the runner's StageSolver, so tests can pass
+this solver into the same pipeline. Enumeration grows as 2^J and is only
+practical for the small fixtures.
 """
 
 import itertools

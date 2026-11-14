@@ -1,39 +1,23 @@
-"""Lexicographic solving and the run-time oracle check.
+"""Run the optimisation stages and the sequence of schedule repairs.
 
-Lexicographic solve
--------------------
-A policy is a list of objectives in priority order, e.g. S0_SPECS =
-[MinShortfall, MaxQuality, MaxTieBreak]. solve_lexicographic optimizes them one at a
-time ("stages"); each stage may not undo what the earlier stages achieved.
+A lexicographic policy solves its objectives one after another. For S0,
+these are MinShortfall, MaxQuality and MaxTieBreak. Once a stage is optimal,
+its value is fixed in all later stages. After a time limit, its incumbent
+becomes a bound instead: later stages may improve it, but not make it worse.
+Each stage also passes its schedule to the next stage as a warm start.
 
-After each stage, its result is handed on to every later stage:
-- status "optimal"    -> fixed[objective] = value     (later stages keep value == v)
-- status "time_limit" -> cap[objective]   = incumbent (later stages keep value not worse
-                         than v; they may still improve it, because v was not proven optimal)
-- its schedule        -> start of the next stage      (a warm start for the MILP)
+If no schedule is found, the stage gets one retry with more time. A second
+failure stops that solve. A result with a schedule can still be uncertified
+when one of its stages reached the time limit.
 
-Example on single_shift with S0_SPECS:
-    stage 1 MinShortfall  fixed {}                      -> Lambda = 0
-    stage 2 MaxQuality    fixed {MinShortfall: 0}       -> U = 6
-    stage 3 MaxTieBreak   fixed {MinShortfall: 0, MaxQuality: 6}
+accept_instance checks coverage of candidate base instances, and
+initial_schedule computes S0. For a perturbation sequence, coverage is solved
+once per step and shared by all arms. Each arm then keeps its own schedule
+and burden history. Oracle checks validate S0, shared coverage and repairs.
+The acceptance solve itself currently uses the solver's recorded value.
 
-Retry: a stage that returns no schedule is retried once with retry_factor * time_limit
-(StageRecord.retried = True). If the retry also finds nothing, the solve stops: the
-later stages never run and LexResult.schedule is None.
-
-Base instances (step 2.5)
--------------------------
-accept_instance draws candidates until one passes the coverage check (exposé 4.3);
-initial_schedule computes its published schedule S0 = the S0_SPECS solve.
-
-Oracle check
-------------
-check_oracles re-computes every recorded stage value with the oracle (via
-Objective.evaluate) and raises OracleMismatch if the solver and the oracle disagree.
-The runner calls it after every solve, so a MILP bug cannot slip into the results.
-
-The solver is a parameter (milp.solve_stage, bruteforce.solve_stage or a test fake),
-so this module never imports a specific solver.
+The stage solver is passed in as an argument. This lets the tests use brute
+force or a small fake without changing the experiment logic.
 """
 
 import time
@@ -57,6 +41,7 @@ from repair.model import (
     StageRecord,
     StageStatus,
     Sequence as EventSequence,
+    SystematicError,
     SequenceResult,
     Step,
     Trajectory,
@@ -93,7 +78,7 @@ class StageSolver(Protocol):
     ) -> StageResult: ...
 
 
-class OracleMismatch(Exception):
+class OracleMismatch(SystematicError):
     """A solver result disagrees with the oracle.
 
     Each message starts with a rule key, so tests can check why it was raised:
@@ -124,7 +109,7 @@ def solve_lexicographic(
         time_limit:   seconds per stage (a retry gets time_limit * retry_factor)
         retry_factor: SolverSettings.retry_factor, 2.0 in the exposé
         start:        start schedule for the first stage, e.g. S_{t-1}
-        base_cap:     caps that hold for EVERY stage from the start, e.g. the shared
+        base_cap:     caps that hold for every stage from the start, e.g. the shared
                       coverage cap {MIN_SHORTFALL: Lambda*_t} of a repair step (3.3).
                       Copied, never mutated; later time_limit stages add to the copy.
 
@@ -132,13 +117,13 @@ def solve_lexicographic(
     around the solver call) and the last stage's schedule; schedule is None if a
     stage failed twice.
     """
-    fixed: dict[Objective, int] = {}  # earlier optimal stages: value must stay ==
+    fixed: dict[Objective, int] = {}  # Later stages must keep these proven values exactly.
     cap: dict[Objective, int] = dict(base_cap) if base_cap is not None else {}
     records: list[StageRecord] = []
 
     for objective in specs:
-        start_time = time.perf_counter()  # seconds cover the retry too
-        # dict(...) copies, so a solver that keeps the mapping does not see later changes
+        start_time = time.perf_counter()  # Include retry time in the recorded stage time.
+        # Pass copies so later updates do not alter an earlier solver call.
         s = solve(
             instance,
             objective,
@@ -148,7 +133,7 @@ def solve_lexicographic(
             time_limit=time_limit,
         )
 
-        # No schedule in time: exactly one retry, with more time
+        # Retry once when the first call returned no schedule.
         retried = s.schedule is None
         if retried:
             s = solve(
@@ -171,17 +156,17 @@ def solve_lexicographic(
             )
         )
 
-        # Failed twice: stop here, later stages never run
+        # There is still no schedule, so later stages cannot run.
         if s.schedule is None:
             return LexResult(schedule=None, stages=tuple(records))
 
-        assert s.value is not None  # a schedule always comes with its value
+        assert s.value is not None  # A returned schedule must also have an objective value.
         if s.status == StageStatus.OPTIMAL:
             fixed[objective] = s.value
-        else:  # time_limit: the incumbent is not proven optimal, so later stages may improve it
+        else:  # This value is unproven. Keep it as a bound, allowing later improvement.
             cap[objective] = s.value
 
-        start = s.schedule  # hand-over: the next stage starts from this schedule
+        start = s.schedule  # Use this solution as the starting point for the next stage.
 
     return LexResult(schedule=start, stages=tuple(records))
 
@@ -204,18 +189,18 @@ def check_oracles(
         return
     schedule = result.schedule
 
-    # 1. zip() would silently drop extra stages or pair the wrong ones, so check first
+    # Check the lengths and names before zip() can hide a missing stage.
     names = [spec.name for spec in specs]
     recorded = [stage.name for stage in result.stages]
     if names != recorded:
         raise OracleMismatch(f"stages: specs {names}, result has {recorded}")
 
-    # 2. Hard constraints
+    # Check feasibility of the final schedule first.
     found = oracle.violations(schedule, instance)
     if found:
         raise OracleMismatch(f"infeasible: {found}")
 
-    # 3. Each recorded value against the oracle's value
+    # Recalculate the stage values from that same final schedule.
     for spec, stage in zip(specs, result.stages):
         actual = spec.evaluate(schedule, instance)
         claimed = stage.value
@@ -233,17 +218,19 @@ def check_oracles(
             raise OracleMismatch(f"cap: {detail} (worse than the unproven incumbent)")
 
 
-# --- base instances (exposé 4.3) -------------------------------------------------
+# Base instances (exposé 4.3)
 
 
 class AcceptanceFailed(Exception):
-    """The base seed and every reserve seed failed max_draws candidates each."""
+    """No candidate was accepted after trying the base and all reserve seeds."""
 
 
 def candidate_seed(seed: int, draw: int) -> int:
-    """Seed of candidate `draw` (0-based) for `seed`: draw 0 is the seed itself, so
-    most accepted instances have used_seed == base_seed; later draws are
-    derive_seed(seed, "redraw", draw)."""
+    """Get the seed for one candidate attempt, counting draws from zero.
+
+    The first attempt uses the given seed itself. Later attempts derive a new
+    seed with the "redraw" key, so a rejected candidate can be reproduced.
+    """
     if draw < 0:
         raise ValueError("draw must be nonnegative")
 
@@ -264,30 +251,23 @@ def accept_instance(
     max_draws: int = 100,
     under_supplied: bool = False,
 ) -> tuple[Instance, AcceptanceLog]:
-    """Draw candidates until one is accepted; return it and how it was found.
+    """Draw candidates until one passes the base-instance acceptance rule.
 
-    Coverage check per candidate: solve_lexicographic(candidate, [MIN_SHORTFALL], solve,
-    time_limit=settings.time_limit, retry_factor=settings.retry_factor), giving Lambda*_0.
+    For the main classes, run MinShortfall and accept a recorded value of zero.
+    Shortfall cannot be negative, so a feasible incumbent with value zero is
+    sufficient even after a time limit. Try max_draws candidates per seed,
+    then move to the next reserve seed. No schedule counts as a rejection.
 
-    Main classes: accept iff Lambda*_0 == 0. The status does not matter here: Lambda >= 0,
-        so an incumbent of 0 is optimal even after a timeout. No schedule -> rejected.
-        Candidates: candidate_seed(base_seed, 0..max_draws-1); then the same for
-        reserve[0], reserve[1], ... (replaced=True). All failed -> AcceptanceFailed.
-    Under-supplied (under_supplied=True): accept the first candidate and record its
-        Lambda*_0 (exposé 4.3: never rejected for coverage). No schedule -> ValueError.
+    For the under-supplied class, keep the first candidate with a returned
+    schedule regardless of shortfall. No returned schedule raises ValueError.
+    A positive value after a time limit is an incumbent, not a proven optimum.
 
-    reserve: the reserve seeds of THIS base seed only (the caller derives them, e.g.
-    derive_seed(root, "reserve", size_class, index, j)). These separate purposes;
-    finite-range seed collisions must still be checked by the protocol tests.
-    Never mutated.
+    The log keeps the original seed, accepted candidate seed, draw and rejection
+    counts, reserve use and recorded shortfall. The reserve list is not changed.
 
-    AcceptanceLog: base_seed as given; used_seed = the accepted candidate's seed
-    (= instance.meta.seed); draws and rejected counted over all seeds tried;
-    lambda_star_0 of the accepted candidate.
-
-    Validate the acceptance solve itself with the oracle. A later S0 solve cannot
-    validate an earlier acceptance decision. Use the schedule's actual shortfall
-    for acceptance and logging; an unproven incumbent is not necessarily optimal.
+    Current limitation: this function does not call check_oracles on the
+    acceptance result. initial_schedule checks its own later solve, but that
+    does not independently validate this earlier acceptance decision.
     """
     if max_draws <= 0:
         raise ValueError("max_draws must be positive")
@@ -328,11 +308,11 @@ def accept_instance(
                 rejected += 1
                 continue
 
-            # Lambda*_0 is the solver's recorded value. No oracle check here: S0 re-solves
-            # MinShortfall as its first stage, and initial_schedule's check_oracles
-            # verifies that value, so a wrong 0 is caught there (see the docstring).
+            # Read the recorded acceptance value; this solve has no oracle check here.
+            # S0 is solved and checked later, but that is a different solver call.
+            # It cannot independently confirm this earlier acceptance decision.
             shortfall = result.stages[-1].value
-            assert shortfall is not None  # a stage with a schedule records its value
+            assert shortfall is not None  # A stage returning a schedule also needs its value.
 
             if under_supplied or shortfall == 0:
                 log = AcceptanceLog(
@@ -358,11 +338,11 @@ def accept_instance(
 def initial_schedule(
     instance: Instance, settings: SolverSettings, solve: StageSolver
 ) -> LexResult:
-    """S0: solve_lexicographic(instance, S0_SPECS, solve, time_limit=settings.s0_time_limit,
-    retry_factor=settings.retry_factor), then check_oracles (raises OracleMismatch).
+    """Find S0 by best coverage, then best quality, then tie-break.
 
-    The result may be uncertified (a stage hit its time limit): the caller
-    (make_instances) must then replace the instance, because S0 has to be optimal.
+    Use s0_time_limit for each stage and check the result with the oracle.
+    make_instances replaces the instance when this result is not certified,
+    because the experiment requires a proven starting schedule.
     """
     result = solve_lexicographic(
         instance,
@@ -377,29 +357,28 @@ def initial_schedule(
     return result
 
 
-# --- arms (step 3.3) -------------------------------------------------------------
+# Arms (step 3.3)
 
 
 @dataclass(frozen=True)
 class SharedCoverage:
-    """The coverage stage of every repair step, solved once and shared by all arms."""
+    """Keep each step's shared coverage value, solver record and starting schedule."""
 
-    steps: tuple[CoverageStep, ...]  # Lambda*_t and its stage record, t = 1..T
+    steps: tuple[CoverageStep, ...]  # One coverage value and record for each step t = 1..T.
     starts: tuple[
         Schedule, ...
-    ]  # the coverage schedule per step: every arm's warm start
+    ]  # Every arm starts this step from the same coverage solution.
 
 
 def shared_coverage(
     instances_t: list[Instance], settings: SolverSettings, solve: StageSolver
 ) -> SharedCoverage:
-    """Per step t: solve_lexicographic(instance_t, [MIN_SHORTFALL], solve,
-    time_limit=settings.time_limit, retry_factor=settings.retry_factor,
-    start=frozenset()) and check_oracles.
+    """Solve minimum shortfall once per step for all repair arms.
 
-    A solve without a schedule after retry raises RuntimeError: the runner needs a
-    shared coverage incumbent to continue. A time_limit result is kept as it is:
-    its incumbent becomes the cap Lambda*_t and the record says "time_limit".
+    Start from the empty schedule and check the answer with the oracle. When
+    the solve reaches its time limit, keep the incumbent as the shared cap and
+    retain the unproven status. With no schedule after retry, raise RuntimeError
+    because the repair arms have no coverage result to use.
     """
     steps: list[CoverageStep] = []
     starts: list[Schedule] = []
@@ -459,7 +438,7 @@ def run_arm(
     previous = s0
     burden = {
         v.id: 0 for v in instances_t[0].volunteers
-    }  # b_{w,t-1}, volunteer -> count
+    }  # Burden before this repair, b_{w,t-1}, for each volunteer.
     steps: list[Step] = []
 
     for t, instance in enumerate(instances_t, start=1):
@@ -470,7 +449,7 @@ def run_arm(
             )
 
         reference = reference_for(arm, s0, previous)
-        # Snapshot the history before this repair; this step's burden is added below.
+        # Keep the old burden for the objective check; update it after the repair.
         specs = tuple(policy_stages(arm, reference, dict(burden), instance)) + (
             MAX_TIE_BREAK,
         )
@@ -514,11 +493,11 @@ def run_sequence(
     solve: StageSolver,
     manifest: dict,
 ) -> SequenceResult:
-    """One sequence for all arms: instances_along(instance, sequence.events) ONCE ->
-    shared_coverage -> run_arm per arm, in the given order -> SequenceResult.
+    """Run all arms on the same S0 and perturbation sequence.
 
-    Every arm and the coverage stage receive the very same instance objects.
-    ValueError if s0_result is not certified (S0 must be optimal).
+    Build the step instances once, solve their shared coverage, then run each
+    arm in the given order. All arms receive the same instance objects; only
+    their repair choices and burden histories differ. S0 must be certified.
     """
     if s0_result.schedule is None or not s0_result.certified:
         raise ValueError("S0 must have a schedule and be certified")

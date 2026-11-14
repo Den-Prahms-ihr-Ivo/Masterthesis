@@ -1,4 +1,4 @@
-"""protocol.py: seeds, arms, loading the protocol TOML files, and the job matrix."""
+"""Check protocol loading, policy arms, seed derivation and experiment job order."""
 
 import os
 import subprocess
@@ -26,7 +26,7 @@ PILOT = PROTOCOL_DIR / "pilot.toml"
 MAIN = PROTOCOL_DIR / "main.toml"
 
 
-# --- derive_seed ---------------------------------------------------------------
+# Derive_seed
 
 
 def test_derive_seed_deterministic_and_in_range():
@@ -54,7 +54,7 @@ def test_derive_seed_deterministic_and_in_range():
 
 
 def test_derive_seed_sensitive_to_key_order_and_root():
-    """Every part of the input matters, and no two key paths can be confused."""
+    """Changing the root, key order or key type should change these example seeds."""
     base = protocol.derive_seed(7, "a", "b")
 
     assert protocol.derive_seed(7, "b", "a") != base  # key order
@@ -76,7 +76,7 @@ def test_no_collisions_between_pilot_and_main_roots():
     assert not pilot & main
 
 
-# --- arms ----------------------------------------------------------------------
+# Arms
 
 
 def test_main_arms_are_exactly_the_five_policies():
@@ -126,7 +126,7 @@ def test_sensitivity_arms_vary_one_parameter_per_policy():
     ]
 
 
-# --- load_protocol -------------------------------------------------------------
+# Load_protocol
 
 
 def test_load_pilot_toml():
@@ -170,7 +170,8 @@ FILLS = {
 
 def _filled_main(tmp_path, skip=None, extra=()):
     """A copy of main.toml in tmp_path with every gap filled except `skip`,
-    then the (old, new) replacements in `extra`."""
+    then the (old, new) replacements in `extra`.
+    """
     text = MAIN.read_text()
     for name, (old, new) in FILLS.items():
         assert old in text, f"main.toml no longer contains {old!r}"
@@ -225,7 +226,7 @@ def test_require_frozen_accepts_filled_copy(tmp_path):
 
 
 
-# --- instance_jobs and jobs ----------------------------------------------------
+# Instance_jobs and jobs
 #
 # The matrix protocol uses different counts per size class (2, 3, 1), so a loop over
 # the wrong count or the wrong size class changes the totals:
@@ -283,8 +284,11 @@ def test_instance_jobs_without_undersupplied_cell():
     "cells", [protocol.CELLS, ("main",), ("rq2",), ("robustness",), ("undersupplied",)]
 )
 def test_instance_jobs_are_exactly_the_instances_jobs_use(cells):
-    """make_instances.py builds instance_jobs; run_jobs.py loads job.instance.
-    Every job must find its instance, and nothing is built that no job uses."""
+    """Every sequence job should have exactly one generated base-instance file.
+
+    make_instances.py uses instance_jobs(); run_experiment.py loads job.instance.
+    Check both lists agree, without extra unused instances or missing inputs.
+    """
     p = _matrix_protocol(cells=cells)
     built = protocol.instance_jobs(p)
 
@@ -339,7 +343,8 @@ def test_main_jobs_nested_order_kind_and_scale():
 def test_sensitivity_arms_only_on_balanced_n40(sensitivity_instances, n_extended):
     """Exposé 4.5: the sensitivity arms run on the balanced n = 40 main sequences, for
     the first `sensitivity_instances` instances (None = all). Every other main job has
-    exactly the main arms."""
+    exactly the main arms.
+    """
     p = _matrix_protocol(sensitivity_instances=sensitivity_instances)
     main_arms = protocol.main_arms(p.lam, p.alpha)
     extended = main_arms + protocol.sensitivity_arms(p.lam_grid, p.alpha_grid)
@@ -356,9 +361,37 @@ def test_sensitivity_arms_only_on_balanced_n40(sensitivity_instances, n_extended
     assert n_jobs == n_extended * p.n_sequences
 
 
+def test_main_n40_balanced_has_nine_arms_others_five():
+    """Exposé 4.5: the balanced n = 40 main jobs carry the 5 main arms plus WQS(1),
+    WQS(4), HWF(1/2), HWF(2); every other main job has exactly the 5 main arms.
+    """
+    for job in _cell(_matrix_protocol(), "main"):
+        balanced_40 = job.instance.size_class == 40 and job.profile == SequenceProfile.BALANCED
+        assert len(job.arms) == (9 if balanced_40 else 5), job
+        assert len({arm.name for arm in job.arms}) == len(job.arms)  # no arm twice
+
+
+def test_dropping_a_size_class():
+    """The adequacy rule may drop a main size class: no job and no instance of it remain,
+    and the other classes are unchanged.
+    """
+    full = _matrix_protocol()
+    without_80 = _matrix_protocol(size_classes=(20, 40))
+
+    assert all(job.instance.size_class != 80 for job in protocol.jobs(without_80))
+    assert all(i.size_class != 80 for i in protocol.instance_jobs(without_80))
+    assert [j for j in protocol.jobs(full) if j.instance.size_class != 80] == protocol.jobs(
+        without_80
+    )
+
+
 def test_rq2_jobs():
-    """One rq2 sequence per main instance ("x 1"): sequence 0, rq2 arms, default k = n/20.
-    CHECK against DESIGN.md section 7 if RQ2 should have N_Q sequences instead."""
+    """The current matrix has one RQ2 sequence per main instance.
+
+    It uses sequence index 0, the two SF arms and default background k = n/20.
+    Keep the existing design question open: check DESIGN.md section 7 if RQ2
+    should instead use N_Q sequences.
+    """
     p = _matrix_protocol()
     rq2 = _cell(p, "rq2")
 
@@ -381,7 +414,8 @@ def test_rq2_background_scale_overrides_default():
 
 def test_robustness_jobs():
     """Exposé 4.7: the first N_secondary main n = 40 instances, independent targeting
-    at the calibrated scale, balanced profile, N_Q sequences each, main arms."""
+    at the calibrated scale, balanced profile, N_Q sequences each, main arms.
+    """
     p = _matrix_protocol()
     jobs = _cell(p, "robustness")
 
@@ -397,7 +431,8 @@ def test_robustness_jobs():
 
 def test_undersupplied_jobs():
     """Exposé 4.7: separate under-supplied instances (n = 40 demand), S0-targeted,
-    balanced profile, k = 2, N_Q sequences each, main arms."""
+    balanced profile, k = 2, N_Q sequences each, main arms.
+    """
     p = _matrix_protocol()
     jobs = _cell(p, "undersupplied")
 
@@ -415,7 +450,8 @@ def test_undersupplied_jobs():
 
 def test_jobs_unique_and_deterministic():
     """No job twice, and the same protocol gives the same list (restart and shard rely
-    on the order)."""
+    on the order).
+    """
     first = protocol.jobs(_matrix_protocol())
     keys = [(j.cell, j.instance, j.kind, j.profile, j.sequence_index) for j in first]
 
@@ -446,7 +482,7 @@ def test_jobs_rejects_more_robustness_than_main_n40_instances():
         protocol.jobs(p)
 
 
-# --- shard ---------------------------------------------------------------------
+# Shard
 
 
 def _fake_jobs(n=50):
@@ -485,3 +521,79 @@ def test_shard_rejects_bad_index(index, count):
     """all_jobs[-1::3] would silently return the wrong jobs, so bad values raise."""
     with pytest.raises(ValueError):
         protocol.shard(_fake_jobs(), index, count)
+
+
+# Seeds and keys for the scripts
+
+
+def test_instance_seeds_scheme_and_distinct():
+    """The documented derive_seed keys (acceptance_check.py uses the same); every base and
+    reserve seed of the protocol is distinct.
+    """
+    p = _matrix_protocol()
+    base, reserve = protocol.instance_seeds(p, InstanceJob(40, 2))
+
+    assert base == protocol.derive_seed(p.root_seed, "instance", 40, 2)
+    assert reserve == [protocol.derive_seed(p.root_seed, "reserve", 40, 2, j)
+                       for j in range(p.n_reserve_seeds)]
+    under_base, _ = protocol.instance_seeds(p, InstanceJob(40, 2, under_supplied=True))
+    assert under_base == protocol.derive_seed(p.root_seed, "instance", "u40", 2)
+
+    seeds = []
+    for job in protocol.instance_jobs(p):
+        b, r = protocol.instance_seeds(p, job)
+        seeds += [b, *r]
+    assert len(seeds) == len(set(seeds))
+
+
+def test_sequence_seeds_distinct_and_deterministic():
+    p = _matrix_protocol()
+    seeds = [protocol.sequence_seed(p, job) for job in protocol.jobs(p)]
+
+    assert len(seeds) == len(set(seeds))
+    assert seeds == [protocol.sequence_seed(_matrix_protocol(), j) for j in protocol.jobs(p)]
+    job = protocol.jobs(p)[0]
+    assert protocol.sequence_seed(p, job) == protocol.derive_seed(
+        p.root_seed, "sequence", job.cell, job.instance.size_class, job.instance.index,
+        job.profile, job.sequence_index,
+    )
+
+
+def test_job_key_unique_readable_file_safe():
+    import re
+
+    p = _matrix_protocol()
+    keys = [protocol.job_key(job) for job in protocol.jobs(p)]
+
+    assert len(keys) == len(set(keys))
+    assert all(re.fullmatch(r"[A-Za-z0-9-]+", k) for k in keys)
+    assert "main-n40-i2-balanced-q1" in keys
+    assert any(k.startswith("undersupplied-n40u-i0-balanced-q") for k in keys)
+
+
+
+def test_derive_seed_golden_values():
+    """Pinned values. The acceptance rates in NOTES.md, the M2 gate run and the
+    pilot / main separation all rest on these seeds: changing derive_seed or the key
+    scheme must be a loud, deliberate decision (update the values and log it).
+    """
+    assert protocol.derive_seed(20261109, "instance", 20, 0) == 3865029198492689663
+    assert protocol.derive_seed(7, "instance", 40, 3) == 2466000903135589113
+
+
+def test_gate_root_seeds_never_collide_with_the_run():
+    """m2_gate.py's instances (same scheme, gate_root) are disjoint from the run's."""
+    from dataclasses import replace
+
+    p = _matrix_protocol()
+    gate = replace(p, root_seed=protocol.gate_root(p))
+
+    def seeds(q):
+        out = set()
+        for ij in protocol.instance_jobs(q):
+            base, reserve = protocol.instance_seeds(q, ij)
+            out |= {base, *reserve}
+        return out
+
+    assert protocol.gate_root(p) == protocol.derive_seed(p.root_seed, "m2-gate")
+    assert seeds(gate).isdisjoint(seeds(p))

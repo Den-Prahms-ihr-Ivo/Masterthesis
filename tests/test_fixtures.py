@@ -1,7 +1,7 @@
-"""conftest.py fixtures: they build, have the shape of the value sheet, and fit tests/expected.py.
+"""Check the shape and inputs of the examples in conftest.py.
 
-These tests check structure and data, not computed values; test_oracle (1.3) checks
-that U, Lambda and the violations equal tests/expected.py.
+The fixtures must match the value sheet and repair.expected. These tests
+check the data; test_oracle.py checks quality, shortfall and violations.
 """
 
 import dataclasses
@@ -69,7 +69,7 @@ def test_expected_cells_exist_in_fixture(request, name):
                 )
 
 
-# --- data spot checks against the sheet ----------------------------------------------
+# Data spot checks against the sheet
 
 
 def test_single_shift_data(single_shift):

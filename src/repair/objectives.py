@@ -1,23 +1,16 @@
-"""Objective specs: what one lexicographic stage optimizes.
+"""Describe what each solver stage should optimise.
 
-An Objective has three parts:
-- name:     shows up in StageRecord.name, e.g. "MaxQuality"
-- maximize: the direction (True = larger is better, False = smaller is better)
-- evaluate: computes the objective's value for (schedule, instance), via the oracle
-- reference: MinDistance and MaxQualityMinusDistance, the schedule the distance is
-             measured to (S_{t-1} or S_0)
-- weights:   weighted MinDistance only (HWF), volunteer -> integer weight
-- lam:       MaxQualityMinusDistance only (WQS), utility points per changed cell
+An Objective stores its name, direction and a function for evaluating a
+schedule. Distance objectives also store the reference schedule and, where
+needed, volunteer weights or lambda.
 
-It is solver-independent. The brute force calls evaluate on every candidate schedule;
-runner.check_oracles calls it to re-check every stage of a solver result.
+The brute-force solver uses evaluate() directly. The runner uses it to check
+the MILP answer. The MILP builds its own linear expression from the name and
+parameters, without calling evaluate(). This keeps the calculations separate.
 
-Objectives are frozen dataclasses, so they are hashable and can be dict keys:
-fixed = {MIN_SHORTFALL: 0} means "Lambda must stay 0". Equality ignores evaluate, so
-min_distance(S0) == min_distance(S0) although each call builds a new function.
-
-milp.solve_stage builds the linear objective from name (and reference); it never calls
-evaluate. That keeps the MILP independent of the oracle.
+Objectives are frozen and can be dictionary keys. For example,
+fixed = {MIN_SHORTFALL: 0} tells later stages to keep shortfall at zero.
+Equality ignores the function object and compares the stored parameters.
 """
 
 import random
@@ -56,13 +49,15 @@ class Objective:
         return value >= bound if self.maximize else value <= bound
 
 
-# ------------------------------------------------------------------ tie-break
+# Tie-break
 
 
 def tie_break_ranks(instance: Instance) -> dict[Cell, int]:
-    """Rank 1..J for every cell (J = volunteers x shifts), a permutation seeded by instance.meta.seed.
+    """Assign the ranks 1..J to all cells using the instance seed.
 
-    Same instance -> same ranks, so the final schedule is reproducible.
+    Equal instances give equal ranks. Permuting ranks avoids always giving the
+    largest weight to the same volunteer ids. Different schedules can still
+    have the same rank sum, so this is not a proof of a unique optimum.
     """
     cells = [(v.id, s.id) for v in instance.volunteers for s in instance.shifts]
     ranks = list(range(1, len(cells) + 1))  # 1, 2, ..., J
@@ -71,16 +66,16 @@ def tie_break_ranks(instance: Instance) -> dict[Cell, int]:
 
 
 def tie_break(schedule: Schedule, instance: Instance) -> int:
-    """Sum of the tie-break ranks of the schedule's cells.
+    """Sum the ranks of assigned cells for the last optimisation stage.
 
-    The last stage maximizes this. It picks one schedule among those that tie on
-    every earlier objective, deterministically and without favouring low ids.
+    Earlier objective values remain fixed or capped. The rank sum helps choose
+    between schedules with equal earlier values, but equal sums are possible.
     """
     ranks = tie_break_ranks(instance)
     return sum(ranks[cell] for cell in schedule)
 
 
-# ------------------------------------------------------------------ the objectives
+# The objectives
 
 MIN_SHORTFALL = Objective(
     "MinShortfall", maximize=False, evaluate=oracle.shortfall
@@ -96,7 +91,12 @@ def min_distance(
     reference: Schedule,
     weights: Mapping[VolunteerId, int] | None = None,
 ) -> Objective:
-    """Minimize ordinary or weighted assignment distance."""
+    """Create the ordinary or history-weighted distance objective.
+
+    Both added and removed cells count. With weights, each changed cell gets
+    its volunteer's weight. Copy the supplied weights so later changes to the
+    caller's dictionary cannot change this objective.
+    """
 
     if weights is None:
 
@@ -147,7 +147,11 @@ def max_quality_minus_distance(
     reference: Schedule,
     lam: int,
 ) -> Objective:
-    """Maximize quality minus lam times assignment distance."""
+    """Create the WQS objective U(S) - lambda * H(S, reference).
+
+    Lambda is the quality cost of one changed cell. Only non-negative integers
+    are accepted here so the objective remains integer-valued.
+    """
 
     if not isinstance(lam, int) or isinstance(lam, bool) or lam < 0:
         raise ValueError("lam must be a non-negative integer (not bool)")

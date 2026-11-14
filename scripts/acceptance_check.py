@@ -1,16 +1,15 @@
-"""Gate 2.5: accept base instances with SCIP and report the acceptance rates.
+"""Check base-instance acceptance with SCIP (Gate 2.5).
 
-For every size class: N base seeds -> accept_instance -> initial_schedule. Prints one
-row per size class (draws, rejections, reserve use, certified S0, time) and exits with
-status 1 if any S0 is not certified.
+For each requested size, draw the base seeds, accept instances and solve S0.
+Print the draws, rejections, reserve use, certification and elapsed time.
+Exit with status 1 if any starting schedule is not certified.
 
-Usage:
-    .venv/bin/python scripts/acceptance_check.py                 # pilot.toml, 20 seeds
-    .venv/bin/python scripts/acceptance_check.py --seeds 5 --sizes 20 40
+Run from the project root with src on the import path:
+    python scripts/acceptance_check.py
+    python scripts/acceptance_check.py --seeds 5 --sizes 20 40
 
-Seeds: derive_seed(root_seed, "instance", size_class, i), reserve seeds
-derive_seed(root_seed, "reserve", size_class, i, j): the same scheme make_instances.py
-will use, so the pilot sees exactly these instances.
+The default is pilot.toml with 20 seeds per size. This uses the same seed
+scheme as make_instances.py, so the corresponding pilot instances match.
 """
 
 import argparse
@@ -20,7 +19,7 @@ import time
 from pathlib import Path
 
 from repair import milp
-from repair.protocol import derive_seed, load_protocol
+from repair.protocol import InstanceJob, instance_seeds, load_protocol
 from repair.runner import accept_instance, initial_schedule
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,11 +51,7 @@ def main() -> int:
     for size in sizes:
         logs, certified, accept_s, s0_s = [], 0, 0.0, 0.0
         for i in range(args.seeds):
-            base = derive_seed(protocol.root_seed, "instance", size, i)
-            reserve = [
-                derive_seed(protocol.root_seed, "reserve", size, i, j)
-                for j in range(protocol.n_reserve_seeds)
-            ]
+            base, reserve = instance_seeds(protocol, InstanceJob(size, i))
             t0 = time.perf_counter()
             instance, log = accept_instance(
                 protocol.generator, size, base, reserve, settings, milp.solve_stage,

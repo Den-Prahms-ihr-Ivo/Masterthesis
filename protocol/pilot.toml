@@ -1,41 +1,45 @@
-# Pilot protocol: small counts, used to calibrate the values main.toml needs.
-# NUMBERS ONLY. Which cells and arms exist is fixed in protocol.py (exposé).
+# Pilot settings for deciding the counts and calibrated values of the main run.
+# The selected cells and numeric settings are here; protocol.py builds their
+# arms and sequence jobs according to the exposé.
 #
-# TOML has no fractions and no null:
-# - fractions are strings: alpha = "1", alpha_grid = ["1/2", "2"]
-# - an optional value is left out to mean "not set" (None)
+# Store fractions as strings, for example alpha = "1/2". The loader converts
+# them to Fraction. Leave out optional values that are not set, since TOML has
+# no null value.
 #
-# The counts below are placeholders: set them to what the pilot needs.
+# These counts are placeholders. The full job list also needs robustness_scale
+# and workforce_factor because their cells are selected below. Until these are
+# set, jobs() refuses to build the full pilot matrix.
 
 name = "pilot"
-date = ""            # the pilot is never frozen
-root_seed = 20261109 # must differ from main.toml's root_seed
+date = ""            # This is the pilot, not the frozen main run.
+root_seed = 20261109 # Keep pilot draws separate from the main root seed.
 
-horizon = 15         # T
+horizon = 15         # T: number of perturbation steps.
 size_classes = [20, 40, 80]
 cells = ["main", "rq2", "robustness", "undersupplied"]
 
 n_instances_secondary = 2
-n_sequences = 2      # N_Q
+n_sequences = 2      # N_Q per instance and RQ1 profile.
 
-lam = 2              # main WQS value
-alpha = "1"          # main HWF value
+lam = 2              # WQS quality cost per changed cell.
+alpha = "1"          # HWF history weight, parsed as a Fraction.
 lam_grid = [1, 4]
 alpha_grid = ["1/2", "2"]
 
-# Calibrated in the pilot, so not set here:
+# Optional fields below are currently unset. The two required calibration
+# values must be supplied for the selected robustness and under-supplied cells:
 # sensitivity_instances, robustness_scale, rq2_background_scale, workforce_factor
 
-[n_instances]        # N_I per size class (keys are strings in TOML)
+[n_instances]        # N_I per size class; the loader converts the keys to integers.
 20 = 2
 40 = 2
 80 = 2
 
 [solver]
-time_limit = 60.0    # tau per stage, seconds
+time_limit = 60.0    # tau: seconds allowed for each stage.
 s0_time_limit = 60.0
 seed = 0
 threads = 1
 retry_factor = 2.0
 
-# [generator] may override any GeneratorConfig field; left out = exposé defaults (Table A1)
+# Add [generator] to override GeneratorConfig fields. Without it, use Table A1 defaults.

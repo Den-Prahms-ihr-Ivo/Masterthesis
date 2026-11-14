@@ -1,4 +1,4 @@
-"""policies.py: arms -> objective lists (exposé Table 1), references, HWF weights."""
+"""Check the Table 1 stage order, repair references and HWF history weights."""
 
 from fractions import Fraction
 
@@ -33,7 +33,7 @@ ALL_ARMS = (
 )
 
 
-# --- validate_arm -----------------------------------------------------------------
+# Validate_arm
 
 
 @pytest.mark.parametrize(
@@ -65,7 +65,7 @@ def test_validate_arm_accepts_every_protocol_arm(arm):
     validate_arm(arm)
 
 
-# --- reference_for ----------------------------------------------------------------
+# Reference_for
 
 
 def test_reference_for_anchored_chained_qo():
@@ -81,7 +81,7 @@ def test_reference_for_anchored_chained_qo():
     )
 
 
-# --- history_weights --------------------------------------------------------------
+# History_weights
 
 VOLUNTEERS = (0, 1, 2)
 
@@ -108,7 +108,7 @@ def test_history_weights_missing_volunteer_is_zero():
 
 @pytest.mark.parametrize("burden", [{}, {0: 5, 1: 1}, {0: 9, 1: 9, 2: 9}])
 def test_history_weights_alpha_0_all_equal(burden):
-    """★ alpha = 0: every weight is 1 whatever the burden, so HWF(0) is SF."""
+    """alpha = 0: every weight is 1 whatever the burden, so HWF(0) is SF."""
     assert history_weights(Fraction(0), burden, VOLUNTEERS) == {0: 1, 1: 1, 2: 1}
 
 
@@ -125,7 +125,7 @@ def test_history_weights_rejects_bad_input(alpha, burden):
         history_weights(alpha, burden, VOLUNTEERS)
 
 
-# --- policy_stages ----------------------------------------------------------------
+# Policy_stages
 
 REF = REPAIR_SLICE_SF
 BURDEN = {0: 2, 2: 1}

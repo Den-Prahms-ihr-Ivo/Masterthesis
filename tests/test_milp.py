@@ -1,8 +1,9 @@
-"""milp.py: every result is compared with the brute force (the reference).
+"""Compare the MILP with brute force on the small fixtures.
 
-Values are compared, not schedules: when two schedules tie, the MILP and the brute
-force may pick different ones. Only with the tie-break stage (S0_SPECS) must the
-schedules be identical.
+Usually the objective values must match, while equal-quality schedules
+may differ. Selected fixture tests also compare schedules after the seeded
+tie-break. Equal rank sums are still possible in general, so these examples
+do not prove that every instance has a unique final schedule.
 """
 
 from dataclasses import replace
@@ -77,7 +78,7 @@ def _assert_matches_bruteforce(
     return got
 
 
-# --- objectives ----------------------------------------------------------------
+# Objectives
 
 
 def test_maxquality_single_shift(single_shift):
@@ -91,13 +92,13 @@ def test_maxquality_single_shift(single_shift):
 
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_maxquality_matches_bruteforce_all_fixtures(request, fixture_name):
-    """★ Hard constraints and U agree with the oracle on every fixture."""
+    """Hard constraints and U agree with the oracle on every fixture."""
     _assert_matches_bruteforce(request.getfixturevalue(fixture_name), MAX_QUALITY)
 
 
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_minshortfall_matches_bruteforce(request, fixture_name):
-    """★ Lambda agrees with the oracle on every fixture."""
+    """Lambda agrees with the oracle on every fixture."""
     _assert_matches_bruteforce(request.getfixturevalue(fixture_name), MIN_SHORTFALL)
 
 
@@ -115,7 +116,7 @@ def test_cap_respected(expert_shift):
 
 
 def test_fixing_is_exact(repair_slice):
-    """★ MaxQuality, then MinDistance to X with U fixed: U stays exactly U* = 18."""
+    """MaxQuality, then MinDistance to X with U fixed: U stays exactly U* = 18."""
     best = _milp(repair_slice, MAX_QUALITY)
     assert best.value == 18
 
@@ -127,12 +128,13 @@ def test_fixing_is_exact(repair_slice):
     assert got.schedule == REPAIR_SLICE_S0  # the only schedule with U = 18
 
 
-# --- weighted MinDistance and WQS (step 3.1) -------------------------------------
+# Weighted MinDistance and WQS (step 3.1)
 
 
 def _references(instance):
     """References that pull the solver in different directions: the S0 optimum, the
-    empty schedule (H = |S|) and every cell (H = J - |S|, partly infeasible)."""
+    empty schedule (H = |S|) and every cell (H = J - |S|, partly infeasible).
+    """
     s0 = solve_lexicographic(instance, S0_SPECS, bruteforce.solve_stage, time_limit=10)
     every_cell = frozenset(
         (v.id, s.id) for v in instance.volunteers for s in instance.shifts
@@ -148,7 +150,7 @@ def _weights(instance):
 
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_weighted_distance_matches_bruteforce(request, fixture_name):
-    """★ Weighted H agrees with the oracle, alone and under the coverage cap."""
+    """Weighted H agrees with the oracle, alone and under the coverage cap."""
     instance = request.getfixturevalue(fixture_name)
     lambda_star = _brute(instance, MIN_SHORTFALL).value
     assert lambda_star is not None
@@ -161,7 +163,8 @@ def test_weighted_distance_matches_bruteforce(request, fixture_name):
 
 def test_weighted_distance_counts_unavailable_reference_cells(repair_slice):
     """(A, s0) in S0 is unavailable after the event and has no variable: its weight
-    still counts (the constant term), like in the unweighted case."""
+    still counts (the constant term), like in the unweighted case.
+    """
     after = apply_event(repair_slice, REPAIR_SLICE_EVENT)
     objective = min_distance(REPAIR_SLICE_S0, weights={0: 7, 1: 1, 2: 2})
 
@@ -172,7 +175,7 @@ def test_weighted_distance_counts_unavailable_reference_cells(repair_slice):
 @pytest.mark.parametrize("lam", [1, 2, 4])
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_wqs_matches_bruteforce_for_lambda_1_2_4(request, fixture_name, lam):
-    """★ U - lam * H agrees with the oracle for every reference, also under the cap."""
+    """U - lam * H agrees with the oracle for every reference, also under the cap."""
     instance = request.getfixturevalue(fixture_name)
     lambda_star = _brute(instance, MIN_SHORTFALL).value
     assert lambda_star is not None
@@ -194,7 +197,8 @@ def test_wqs_matches_bruteforce_for_lambda_1_2_4(request, fixture_name, lam):
 def test_wqs_after_event_value_sheet(repair_slice, lam, value, schedule):
     """After the event, reference S0, under the coverage cap Lambda <= 0 (as in a real
     repair step): the unique WQS optimum is the value sheet's choice. Without the cap,
-    lam = 4 would rather cancel s0 (value 6)."""
+    lam = 4 would rather cancel s0 (value 6).
+    """
     after = apply_event(repair_slice, REPAIR_SLICE_EVENT)
     objective = max_quality_minus_distance(REPAIR_SLICE_S0, lam)
 
@@ -205,7 +209,8 @@ def test_wqs_after_event_value_sheet(repair_slice, lam, value, schedule):
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_fixing_wqs_and_weighted_distance_is_exact(request, fixture_name):
     """A later stage with a WQS or weighted-H value fixed: the fixing constraint uses the
-    same expression, so the tie-break optimum matches the brute force."""
+    same expression, so the tie-break optimum matches the brute force.
+    """
     instance = request.getfixturevalue(fixture_name)
     reference = _references(instance)[0]
 
@@ -218,12 +223,12 @@ def test_fixing_wqs_and_weighted_distance_is_exact(request, fixture_name):
         _assert_matches_bruteforce(instance, MAX_TIE_BREAK, fixed={objective: best})
 
 
-# --- lexicographic -------------------------------------------------------------
+# Lexicographic
 
 
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_s0_specs_give_identical_schedule_to_bruteforce(request, fixture_name):
-    """★ With the tie-break stage the optimum is unique, so the schedules must be identical."""
+    """The solvers should choose the same schedule after tie-breaking on these fixtures."""
     instance = request.getfixturevalue(fixture_name)
 
     got = solve_lexicographic(instance, S0_SPECS, milp.solve_stage, time_limit=10)
@@ -237,7 +242,7 @@ def test_s0_specs_give_identical_schedule_to_bruteforce(request, fixture_name):
 
 
 def test_min_distance_with_unavailable_reference_cells(repair_slice):
-    """★ The reference S0 contains (A, s0), which is now unavailable and has no variable.
+    """The reference S0 contains (A, s0), which is now unavailable and has no variable.
 
     H must still count it: the constant term |reference| does that.
     Alone: drop (A, s0), keep the rest -> H = 1.
@@ -257,12 +262,12 @@ def test_min_distance_with_unavailable_reference_cells(repair_slice):
 
 @pytest.mark.parametrize("fixture_name", FIXTURES)
 def test_aux_variables_bound_quality_from_below(request, fixture_name):
-    """★ MinDistance with U fixed at U*: the true U of the result still meets U*.
+    """A fixed model quality must not hide a lower actual schedule quality.
 
-    The mentorship, buffer and surplus variables are only pushed to their true values
-    when U is the objective. Here it is a constraint, so a loose aux variable would let
-    the MILP claim U* for a schedule whose real U is lower. Every feasible schedule is
-    tried as the reference, so each one pulls the solver in another direction.
+    Here distance is optimised while U is fixed. The auxiliary variables are
+    therefore not driven by the quality objective directly. Try every feasible
+    reference schedule and verify the actual U, so a loose auxiliary bound
+    cannot make an incorrect fixing look valid.
     """
     instance = request.getfixturevalue(fixture_name)
     u_star = _brute(instance, MAX_QUALITY).value
@@ -275,7 +280,7 @@ def test_aux_variables_bound_quality_from_below(request, fixture_name):
         assert oracle.quality(got.schedule, instance) >= u_star, sorted(reference)
 
 
-# --- solver behaviour ----------------------------------------------------------
+# Solver behaviour
 
 
 def test_warm_start_feasible_and_infeasible(repair_slice):
@@ -302,14 +307,36 @@ def test_three_runs_identical(repair_slice):
     assert len({tuple(r.value for r in run.stages) for run in runs}) == 1
 
 
-def test_milp_timeout_status():
-    """A stage stopped by its time limit reports time_limit with a usable incumbent.
+class _FakeScip:
+    def __init__(self, status):
+        self.status = status
 
-    Generated n = 80, tie-break stage with Lambda and U fixed, warm-started from the
-    MaxQuality solution. The roadmap says tau = 1 s, but this machine solves every
-    n = 80 stage within 1 s (tie-break: ~0.5 s); 0.05 s with a warm start stopped with
-    time_limit in every probe. The incumbent must be feasible, keep the fixed values,
-    have its claimed value, and lie below the dual bound (maximisation).
+    def getStatus(self):  # noqa: N802 (PySCIPOpt's name)
+        return self.status
+
+
+def _status_of(scip_status):
+    return milp._status(_FakeScip(scip_status))  # type: ignore[arg-type]
+
+
+def test_ctrl_c_inside_scip_is_an_interrupt_not_a_failure():
+    """SCIP catches SIGINT and returns "userinterrupt". As a ValueError it became one
+    failure file per worker and tripped the breaker; it must stop the run instead.
+    """
+    with pytest.raises(KeyboardInterrupt):
+        _status_of("userinterrupt")
+    with pytest.raises(ValueError):
+        _status_of("unbounded")
+    assert _status_of("timelimit") == StageStatus.TIME_LIMIT
+
+
+def test_milp_timeout_status():
+    """A time-limited stage should keep its usable incumbent and report the timeout.
+
+    Use a generated n=80 instance and warm-start the tie-break stage from the
+    quality solution. The 0.05-second limit was chosen after local probes; this
+    test can depend on machine speed. Check feasibility, fixed values, actual
+    objective value and the dual bound of the returned incumbent.
     """
     instance = generate_instance(GeneratorConfig(), 80, 0)
     quality = milp.solve_stage(

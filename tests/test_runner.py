@@ -1,11 +1,10 @@
-"""runner.py: solve_lexicographic, check_oracles, accept_instance, initial_schedule
+"""Check how the runner passes results between stages and repair steps.
 
-All tests run with solve=bruteforce.solve_stage, a spy around it, or a scripted fake:
-- spy  = Recorder():            records each call, answers with the brute force
-- fake = Recorder([r1, r2]):    records each call, answers r1, then r2, ... (no solving)
-The check_oracles tests build a LexResult by hand and let the oracle judge it.
-The accept_instance tests use Coverage, a fake that answers scripted Lambda*_0 values
-for real generated candidates (no solving).
+Most tests use brute force, a recorder around it, or scripted solver answers.
+Recorder() forwards calls to brute force; Recorder([r1, r2]) returns those
+answers in order. Coverage supplies chosen shortfall values for acceptance
+tests. A separate solver-marked test also checks real SCIP on a generated
+instance. Hand-built LexResults exercise the oracle checks directly.
 """
 
 from collections.abc import Callable, Iterable, Mapping
@@ -135,7 +134,7 @@ def _record(name: str, status: StageStatus, value: int) -> StageRecord:
     return StageRecord(name=name, status=status, value=value, bound=None, seconds=0.0)
 
 
-# --- solve_lexicographic -------------------------------------------------------
+# Solve_lexicographic
 
 
 def test_s0_specs_on_single_shift(single_shift):
@@ -216,7 +215,7 @@ def test_two_failures_return_lexresult_none(single_shift):
 
 
 def test_timeout_fixes_incumbent_value(single_shift):
-    """A time_limit stage passes its incumbent value on as a cap, not as fixed and not its bound."""
+    """Pass a timed-out stage's incumbent as a bound; do not fix it or use its dual bound."""
     fake = Recorder(
         [StageResult(B, 3, StageStatus.TIME_LIMIT, bound=6.0), StageResult(B, 0)]
     )
@@ -235,7 +234,8 @@ def test_timeout_fixes_incumbent_value(single_shift):
 
 def test_base_cap_applies_to_every_stage(expert_shift):
     """base_cap holds from the first stage on: Lambda <= 0 forces both expert_shift
-    shifts open (U = 6, not 7). The caller's mapping is never mutated."""
+    shifts open (U = 6, not 7). The caller's mapping is never mutated.
+    """
     spy = Recorder()
     base_cap = {MIN_SHORTFALL: 0}
 
@@ -248,7 +248,7 @@ def test_base_cap_applies_to_every_stage(expert_shift):
     assert base_cap == {MIN_SHORTFALL: 0}
 
 
-# --- check_oracles -------------------------------------------------------------
+# Check_oracles
 
 
 @pytest.mark.ivo
@@ -335,7 +335,7 @@ def test_check_oracles_raises_when_stages_do_not_match_specs(single_shift):
         check_oracles(single_shift, (MIN_SHORTFALL, MAX_QUALITY), result)
 
 
-# --- accept_instance ------------------------------------------------------------
+# Accept_instance
 
 CFG = GeneratorConfig()
 SETTINGS = SolverSettings(time_limit=11.0, s0_time_limit=7.0, retry_factor=3.0)
@@ -395,8 +395,9 @@ def test_candidate_seed():
 
 
 def test_main_accepts_only_zero_shortfall():
-    """★ Lambda*_0 = 2, 1, 0: the third candidate is accepted, the log says so, and the
-    coverage check is one MinShortfall stage with time_limit tau."""
+    """Lambda*_0 = 2, 1, 0: the third candidate is accepted, the log says so, and the
+    coverage check is one MinShortfall stage with time_limit tau.
+    """
     coverage = Coverage([2, 1, 0])
 
     instance, log = _accept(coverage)
@@ -425,7 +426,8 @@ def test_first_candidate_accepted_keeps_base_seed():
 )
 def test_acceptance_edge_cases(values, status, draws):
     """No schedule counts as a rejection; an incumbent of 0 is accepted even after a
-    timeout (Lambda >= 0, so 0 is optimal)."""
+    timeout (Lambda >= 0, so 0 is optimal).
+    """
     _, log = _accept(Coverage(values, status))
 
     assert (log.draws, log.lambda_star_0) == (draws, 0)
@@ -433,7 +435,8 @@ def test_acceptance_edge_cases(values, status, draws):
 
 def test_redraw_then_reserve_after_max_draws():
     """3 rejections exhaust the base seed; reserve[0] is drawn next (its first candidate
-    is the reserve seed itself) and its second candidate is accepted."""
+    is the reserve seed itself) and its second candidate is accepted.
+    """
     reserve = list(RESERVE)
     coverage = Coverage([1, 1, 1, 1, 0])
 
@@ -460,7 +463,7 @@ def test_all_reserve_seeds_fail_raises():
 
 
 def test_under_supplied_never_rejected():
-    """★ The first candidate is accepted whatever its Lambda*_0, which is recorded."""
+    """The first candidate is accepted whatever its Lambda*_0, which is recorded."""
     cfg = replace(CFG, workforce_factor=0.8)
 
     instance, log = accept_instance(
@@ -489,7 +492,7 @@ def test_accept_is_deterministic():
     assert first[0] is not second[0]  # really built twice
 
 
-# --- initial_schedule -----------------------------------------------------------
+# Initial_schedule
 
 
 def test_initial_schedule_uses_s0_specs_and_time_limit(single_shift):
@@ -532,13 +535,14 @@ def test_initial_schedule_runs_the_oracle_check(single_shift):
         initial_schedule(single_shift, SETTINGS, liar)
 
 
-# --- with SCIP ------------------------------------------------------------------
+# With SCIP
 
 
 @pytest.mark.solver
 def test_accept_and_s0_generated_n20():
     """Real SCIP on a generated n = 20 instance: accepted with Lambda*_0 = 0, and S0 is
-    certified, feasible and fully covered."""
+    certified, feasible and fully covered.
+    """
     settings = SolverSettings(time_limit=60.0, s0_time_limit=60.0)
     base = derive_seed(1, "instance", 20, 0)
     reserve = [derive_seed(1, "reserve", 20, 0, j) for j in range(3)]
@@ -554,7 +558,7 @@ def test_accept_and_s0_generated_n20():
     assert s0.stages[0].value == 0
 
 
-# --- arms (step 3.3) ---------------------------------------------------------------
+# Arms (step 3.3)
 #
 # repair_slice with three events:
 #   t = 1  A loses period 0                    Lambda* = 0, U* = 16
@@ -642,7 +646,8 @@ def _run(story, arm, solve=solve_stage):
 
 def test_shared_coverage_values(story):
     """Lambda*_t per step, each solved from the all-cancelled start with tau; the
-    coverage schedule of step t has exactly Lambda*_t."""
+    coverage schedule of step t has exactly Lambda*_t.
+    """
     spy = Spy()
 
     coverage = shared_coverage(story.instances_t, SETTINGS, spy)
@@ -658,7 +663,7 @@ def test_shared_coverage_values(story):
 
 
 def test_shared_coverage_without_schedule_raises(story):
-    """The all-cancelled start is always feasible: finding nothing is a solver bug."""
+    """Without a coverage schedule after the retry, the repair sequence cannot continue."""
     with pytest.raises(RuntimeError):
         shared_coverage(story.instances_t, SETTINGS, Recorder([NOTHING] * 2))
 
@@ -679,7 +684,7 @@ def test_qo_arm_equals_bruteforce_max_quality(story):
 
 @pytest.mark.parametrize("arm", ALL_ARMS, ids=lambda a: a.name)
 def test_every_arm_reaches_lambda_star_every_step(story, arm):
-    """★ Coverage comes first for every arm: Lambda(S_t) = Lambda*_t, S_t feasible."""
+    """Coverage comes first for every arm: Lambda(S_t) = Lambda*_t, S_t feasible."""
     trajectory = _run(story, arm)
 
     assert len(trajectory.steps) == 3
@@ -690,7 +695,8 @@ def test_every_arm_reaches_lambda_star_every_step(story, arm):
 
 def test_arm_calls_capped_and_started_from_coverage(story):
     """Every stage carries the cap Lambda <= Lambda*_t; the first stage of a step starts
-    from the shared coverage schedule, later stages from the previous stage."""
+    from the shared coverage schedule, later stages from the previous stage.
+    """
     coverage = shared_coverage(story.instances_t, SETTINGS, solve_stage)
     spy = Spy()
 
@@ -740,7 +746,7 @@ def test_sf_anchored_equals_chained_at_t1(story):
 
 
 def test_hwf_alpha0_equals_sf(story):
-    """★ alpha = 0 makes every weight 1, so HWF is SF at every step."""
+    """alpha = 0 makes every weight 1, so HWF is SF at every step."""
     hwf, sf = _run(story, HWF_0), _run(story, SF_CHAINED)
 
     assert _schedules(hwf) == _schedules(sf)
@@ -748,14 +754,18 @@ def test_hwf_alpha0_equals_sf(story):
 
 
 def test_wqs_large_lambda_equals_sf(story):
-    """★ lam above the U range: one changed cell costs more than any quality gain, so
-    WQS minimizes H first and then maximizes U, exactly like SF."""
+    """A large enough lambda makes one changed cell cost more than any quality gain.
+
+    On this fixture WQS should then agree with SF: minimise distance first,
+    and use quality to choose between schedules with equal distance.
+    """
     assert _schedules(_run(story, WQS_HUGE)) == _schedules(_run(story, SF_CHAINED))
 
 
 def test_burden_passed_to_hwf_matches_metrics_burden(story):
     """The weights HWF gets at step t are history_weights(alpha, b_{t-1}), with b from
-    metrics.burden over the arm's own trajectory; some burden really builds up."""
+    metrics.burden over the arm's own trajectory; some burden really builds up.
+    """
     coverage = shared_coverage(story.instances_t, SETTINGS, solve_stage)
     spy = Spy()
     ids = [v.id for v in story.instance.volunteers]
@@ -772,8 +782,7 @@ def test_burden_passed_to_hwf_matches_metrics_burden(story):
 
 
 def test_all_arms_receive_identical_instances(story):
-    """★ run_sequence builds the step instances once: the coverage stage and every arm
-    see the very same three objects, equal to instances_along."""
+    """Build step instances once and pass the same objects to coverage and every arm."""
     spy = Spy()
     sequence = EventSequence(SequenceKind.RQ1, SequenceProfile.BALANCED, 0, EVENTS)
     acceptance = AcceptanceLog(0, 0, 1, 0, False, 0)
@@ -824,9 +833,10 @@ def test_ended_early_when_solve_fails(story):
 
 
 def test_oracle_mismatch_raises(story):
-    """★ A solver that claims a tie-break value one too high is caught by the oracle
+    """A solver that claims a tie-break value one too high is caught by the oracle
     check. (The last stage: an inflated earlier value would become a fixing, the next
-    stage would find nothing, and the arm would end early instead.)"""
+    stage would find nothing, and the arm would end early instead.)
+    """
 
     def overstate(instance, objective, result):
         if objective == MAX_TIE_BREAK and result.value is not None:
@@ -839,7 +849,8 @@ def test_oracle_mismatch_raises(story):
 
 def test_coverage_cap_violation_raises(story):
     """A solver that ignores the cap and answers the all-cancelled schedule (with its
-    true values, so check_oracles is satisfied) breaks Lambda <= Lambda*_t."""
+    true values, so check_oracles is satisfied) breaks Lambda <= Lambda*_t.
+    """
 
     def cancel_everything(instance, objective, result):
         empty: Schedule = frozenset()

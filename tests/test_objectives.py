@@ -1,5 +1,8 @@
-"""objectives.py: the weighted MinDistance (HWF), MaxQualityMinusDistance (WQS) and the
-tie-break ranks, evaluated through the oracle (hand values from the value sheet)."""
+"""Check weighted distance, WQS and seeded tie-break ranks.
+
+Expected scores come from the fixture value sheet or a short hand
+calculation, independently of the MILP expression.
+"""
 
 from collections import Counter
 
@@ -19,12 +22,13 @@ from repair.objectives import (
 from repair.perturbations import apply_event
 from tests.builders import Grid
 
-# --- weighted MinDistance (HWF) --------------------------------------------------
+# Weighted MinDistance (HWF)
 
 
 def test_weighted_distance_hand_value(repair_slice):
     """weights {0: 3, 1: 1}: S = {(0, 0), (1, 0)} vs reference {(1, 1)} changes the
-    cells (0, 0), (1, 0), (1, 1) -> 3 + 1 + 1 = 5 (unweighted: 3)."""
+    cells (0, 0), (1, 0), (1, 1) -> 3 + 1 + 1 = 5 (unweighted: 3).
+    """
     schedule = frozenset({(0, 0), (1, 0)})
     reference = frozenset({(1, 1)})
 
@@ -61,7 +65,8 @@ def test_weighted_distance_rejects_bad_weights(weights):
 
 def test_objectives_hashable_and_compared_by_parameters():
     """Objectives are dict keys in fixed / cap: equal parameters -> equal and same hash;
-    different weights -> different objectives."""
+    different weights -> different objectives.
+    """
     a = min_distance(REPAIR_SLICE_S0, weights={0: 2, 1: 5})
     b = min_distance(REPAIR_SLICE_S0, weights={1: 5, 0: 2})  # insertion order irrelevant
     c = min_distance(REPAIR_SLICE_S0, weights={0: 2, 1: 4})
@@ -78,7 +83,7 @@ def test_objectives_hashable_and_compared_by_parameters():
     )
 
 
-# --- MaxQualityMinusDistance (WQS) --------------------------------------------------
+# MaxQualityMinusDistance (WQS)
 
 
 @pytest.mark.parametrize(
@@ -90,7 +95,8 @@ def test_objectives_hashable_and_compared_by_parameters():
 )
 def test_wqs_value(repair_slice, schedule, u, h):
     """After the event (value sheet): U - 2 * H(S, S0); SF* gives 13 - 4 = 9, X gives
-    16 - 8 = 8, so WQS(lam = 2) prefers SF* (REPAIR_SLICE_CHOICE)."""
+    16 - 8 = 8, so WQS(lam = 2) prefers SF* (REPAIR_SLICE_CHOICE).
+    """
     after = apply_event(repair_slice, REPAIR_SLICE_EVENT)
     objective = max_quality_minus_distance(REPAIR_SLICE_S0, 2)
 
@@ -112,7 +118,7 @@ def test_wqs_rejects_bad_lambda(lam):
         max_quality_minus_distance(REPAIR_SLICE_S0, lam)
 
 
-# --- tie-break ranks (3.2) -----------------------------------------------------------
+# Tie-break ranks (3.2)
 
 
 def _instance(seed):
@@ -122,7 +128,8 @@ def _instance(seed):
 
 def test_tiebreak_ranks_permutation_deterministic_seed_dependent():
     """Ranks 1..J, each once, for every cell; same seed -> same ranks; another seed ->
-    another permutation (so no volunteer id is systematically favoured)."""
+    another permutation (so no volunteer id is systematically favoured).
+    """
     instance = _instance(seed=3)
     ranks = tie_break_ranks(instance)
     cells = {(v.id, s.id) for v in instance.volunteers for s in instance.shifts}

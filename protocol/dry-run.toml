@@ -1,0 +1,39 @@
+# Small run for testing the server setup (Gate M3; SERVER.md section 9).
+# I use this to check execution, restart and monitoring, not for thesis results.
+#
+# Use n=20, three instances and 60 seconds per stage (roadmap 4.6).
+# Only main and RQ2 are included. Robustness and under-supplied jobs need n=40
+# and pilot values that are not decided yet.
+#
+# Job count: 3 instances x 3 profiles x 20 sequences, plus 3 RQ2 jobs = 183.
+# The 2026-11-14 Apple M1 run with two workers took about 24 s per main job
+# and 8 s per RQ2 job. The estimate for four CCX23 workers was about 18 minutes;
+# this is an estimate, not a measured server time. It should leave enough time
+# to see progress mail, interrupt the run and test failures. Adjust n_sequences
+# if the rehearsal is too short or long, keeping the stage limit unchanged.
+
+name = "dry-run"
+date = ""             # The rehearsal is not a frozen main protocol.
+root_seed = 20261120  # Separate from the pilot and main root seeds.
+
+horizon = 15
+size_classes = [20]
+cells = ["main", "rq2"]
+
+n_instances_secondary = 0
+n_sequences = 20      # N_Q sequences per main instance and profile.
+
+lam = 2
+alpha = "1"
+lam_grid = [1, 4]
+alpha_grid = ["1/2", "2"]
+
+[n_instances]
+20 = 3
+
+[solver]
+time_limit = 60.0     # tau: seconds allowed for each stage.
+s0_time_limit = 60.0
+seed = 0
+threads = 1
+retry_factor = 2.0

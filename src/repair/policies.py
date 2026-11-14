@@ -1,15 +1,14 @@
-"""Policies as lists of objectives (exposé Table 1). Pure: no solver, no I/O.
+"""Turn each repair policy into an ordered list of objectives (Table 1).
 
-Per arm and step, after the shared coverage cap Lambda <= Lambda*_t:
+All policies receive the same coverage cap from the runner. Their own stages are:
+    QO:  MaxQuality
+    SF:  MinDistance, then MaxQuality
+    QL:  MaxQuality, then MinDistance
+    WQS: MaxQualityMinusDistance
+    HWF: history-weighted MinDistance, then MaxQuality
 
-    QO : [MaxQuality]
-    SF : [MinDistance(ref), MaxQuality]
-    QL : [MaxQuality, MinDistance(ref)]
-    WQS: [MaxQualityMinusDistance(ref, lam)]
-    HWF: [MinDistance(ref, weights=history_weights(alpha, b)), MaxQuality]
-
-The runner adds the coverage cap and appends MAX_TIE_BREAK. Neither belongs
-in policy_stages. Burden is the history BEFORE the current repair.
+The runner adds the final tie-break. HWF uses burden from earlier repairs
+only. This module builds the objectives; it does not solve them.
 """
 
 from __future__ import annotations
@@ -61,7 +60,11 @@ def validate_arm(arm: Arm) -> None:
 
 
 def reference_for(arm: Arm, s0: Schedule, previous: Schedule) -> Schedule | None:
-    """Return S0 for anchored, the previous schedule for chained, or None for QO."""
+    """Choose the schedule against which repair distance is measured.
+
+    Anchored uses S0 throughout. Chained uses this arm's previous schedule.
+    QO has no distance objective and therefore returns None.
+    """
     validate_arm(arm)
 
     if arm.policy == "QO":
@@ -76,13 +79,12 @@ def history_weights(
     burden: Mapping[VolunteerId, int],
     volunteers: Iterable[VolunteerId],
 ) -> dict[VolunteerId, int]:
-    """Return alpha.denominator + alpha.numerator * burden[w] for every volunteer.
+    """Calculate integer weights for HWF from the earlier burden.
 
-    This equals alpha.denominator * (1 + alpha * burden[w]), using exact
-    integer arithmetic. Missing burdens default to zero. Inputs are not mutated.
-
-    Reject a non-Fraction or negative alpha, a non-integer or negative burden
-    (including bool), or a burden entry for an unknown volunteer.
+    For alpha = a/b, use b + a * burden[w]. This is the same as multiplying
+    1 + alpha * burden[w] by b, so the minimiser stays the same and no rounding
+    is needed. Missing volunteers get burden zero. Invalid or negative values
+    and unknown volunteers are rejected; the input mapping is left unchanged.
     """
     if not isinstance(alpha, Fraction) or alpha < 0:
         raise ValueError("alpha must be a Fraction >= 0")
@@ -111,10 +113,11 @@ def policy_stages(
     burden: Mapping[VolunteerId, int],
     instance: Instance,
 ) -> tuple[Objective, ...]:
-    """Return the policy's ordered objectives, without coverage or tie-breaking.
+    """Build the policy stages for this repair, in priority order.
 
-    QO requires reference=None; every other policy requires a schedule. An empty
-    schedule is valid. Only HWF uses burden, covering every instance volunteer.
+    Coverage and tie-breaking are added by the runner. QO needs reference=None;
+    all other policies need a reference schedule, which may be empty. Only HWF
+    uses the burden mapping.
     """
     validate_arm(arm)
 
