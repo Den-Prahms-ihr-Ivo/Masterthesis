@@ -144,8 +144,9 @@ def calibrate_phi(protocol, grid: list[float], n_candidates: int) -> list[dict]:
     """
 
     _positive_count(n_candidates, "n_candidates")
-    if not grid or any(not math.isfinite(phi) or not 0 < phi <= 1 for phi in grid):
-        raise ValueError("grid must contain finite workforce factors in (0, 1]")
+    # phi = 1 is not under-supplied: the generator refuses it (Table A1), so say so here
+    if not grid or any(not math.isfinite(phi) or not 0 < phi < 1 for phi in grid):
+        raise ValueError("grid must contain finite workforce factors in (0, 1)")
 
     rows = []
     for phi in sorted(set(grid), reverse=True):

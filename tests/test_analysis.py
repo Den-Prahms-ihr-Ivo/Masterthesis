@@ -71,6 +71,23 @@ def test_verdict_rejects_bad_input(ci, sign):
         analysis.verdict(ci, sign)
 
 
+def test_predicted_signs_are_the_exposes():
+    """Pinned to the sent exposé, independently of the planted-effect tests (which follow
+    H1_EXPECTED). §3: preference-dominated sequences give a LARGER SF-minus-QL quality
+    deficit and a LARGER QL-minus-SF churn than availability-dominated ones (both
+    preference minus availability > 0); H2 HWF below SF; H3 anchored above chained."""
+    assert analysis.H1_EXPECTED == {"gap": +1, "churn": +1}
+    assert analysis.PREDICTED_SIGN == {"h1_gap": +1, "h1_churn": +1, "h2": -1, "h3": +1}
+
+
+def test_verdicts_test_against_zero_only():
+    """No materiality threshold in the sent exposé: an interval just above zero is
+    supported however small the effect, and one touching zero is inconclusive."""
+    assert analysis.verdict((1e-9, 1e-12, 2e-9), +1) == "supported"
+    assert analysis.verdict((1e-9, 0.0, 2e-9), +1) == "inconclusive"
+    assert analysis.verdict((-1e-9, -2e-9, -1e-12), +1) == "contradicted"
+
+
 def test_bootstrap_ci_seeded_and_constant_data():
     """Same seed -> same interval; the mean is the sample mean; the interval contains it;
     constant data -> a zero-width interval at the constant.
@@ -470,3 +487,107 @@ def test_precision_plan_takes_the_most_demanding_contrast():
     for row in real.itertuples():
         assert row.n_required == analysis.required_instances(row.sd_diff, row.pooled_sd)
     assert plan[plan["contrast"] == "max"]["n_required"].iloc[0] == real["n_required"].max()
+
+
+# --- H3 in the precision plan (DESIGN.md 13.8) --------------------------------------------
+
+
+def _rq2_rows(size, u_anchored, u_chained, *, instances=None, eligible=None):
+    """rq2_table rows with only the columns the precision plan reads (plus D)."""
+    n = len(u_anchored)
+    return pd.DataFrame({
+        "cell": "rq2", "size_class": size,
+        "instance": instances if instances is not None else list(range(n)),
+        "eligible_primary": eligible if eligible is not None else [True] * n,
+        "U_anchored": u_anchored, "U_chained": u_chained,
+        "D": [a - c for a, c in zip(u_anchored, u_chained)],
+    })
+
+
+def test_precision_plan_h3_hand_value():
+    """D = (1, 3, 2): sd_diff = 1. var(U_anchored = 10, 12, 14) = 4, var(U_chained = 9, 9,
+    12) = 3 -> pooled = sqrt(3.5). N = ceil((1.96 / (0.1 sqrt(3.5)))^2) = ceil(109.76) = 110."""
+    inst = planted_instance_table(5, {}, SD, seed=0)
+
+    plan = analysis.precision_plan(inst, rq2=_rq2_rows(20, [10, 12, 14], [9, 9, 12]))
+
+    [h3] = plan[plan["contrast"] == "h3"].itertuples()
+    assert h3.size_class == 20
+    assert h3.sd_diff == pytest.approx(1.0)
+    assert h3.pooled_sd == pytest.approx(math.sqrt(3.5))
+    assert h3.n_required == 110
+
+
+def test_precision_plan_h3_uses_d_not_the_arm_levels():
+    """A large instance term in both arms raises the pooled SD but cancels in D, as for
+    H1: the sample size follows sd(D)."""
+    rq2 = planted_rq2_table(40, 1.0, SD, seed=3)
+    common = np.random.default_rng(4).normal(0.0, 10.0, len(rq2))
+    rq2["U_anchored"] += common
+    rq2["U_chained"] += common
+
+    plan = analysis.precision_plan(planted_instance_table(40, {}, SD, seed=0), rq2=rq2)
+    h3 = plan[plan["contrast"] == "h3"].iloc[0]
+
+    assert h3["sd_diff"] == pytest.approx(rq2["D"].std(ddof=1))
+    assert h3["sd_diff"] < h3["pooled_sd"] / 5
+
+
+def test_precision_plan_h3_averages_eligible_sequences_within_instance():
+    """Same selection and unit as evaluate_h3: ineligible rows are dropped, then the
+    sequences of one instance are averaged."""
+    rq2 = _rq2_rows(
+        20,
+        [10, 14, 12, 999, 14],
+        [9, 9, 9, 0, 12],
+        instances=[0, 0, 1, 1, 2],
+        eligible=[True, True, True, False, True],
+    )
+    # per instance: anchored (12, 12, 14), chained (9, 9, 12) -> D = (3, 3, 2)
+    expected = analysis.precision_plan(
+        planted_instance_table(5, {}, SD, seed=0), rq2=_rq2_rows(20, [12, 12, 14], [9, 9, 12])
+    )
+
+    plan = analysis.precision_plan(planted_instance_table(5, {}, SD, seed=0), rq2=rq2)
+
+    got = plan[plan["contrast"] == "h3"].iloc[0]
+    want = expected[expected["contrast"] == "h3"].iloc[0]
+    assert (got["sd_diff"], got["pooled_sd"]) == pytest.approx((want["sd_diff"], want["pooled_sd"]))
+
+
+def test_precision_plan_h3_counts_for_the_max():
+    inst = planted_instance_table(30, {}, SD, seed=0)
+    # N grows with sd(D) / pooled SD. Arms that spread little (chained almost constant)
+    # but differ widely: the ratio approaches sqrt(2), so N approaches 2 x 385
+    noisy = planted_rq2_table(30, 0.0, 50 * SD, seed=1)
+    noisy["U_chained"] = 100.0 + np.random.default_rng(2).normal(0.0, 0.01, len(noisy))
+    noisy["U_anchored"] = noisy["U_chained"] + noisy["D"]
+
+    plan = analysis.precision_plan(inst, rq2=noisy)
+
+    h3 = plan.loc[plan["contrast"] == "h3", "n_required"].iloc[0]
+    assert plan.loc[plan["contrast"] == "max", "n_required"].iloc[0] == h3
+    assert h3 > plan.loc[~plan["contrast"].isin(["h3", "max"]), "n_required"].max()
+
+
+def test_precision_plan_h3_undefined_without_rq2_rows_makes_max_undefined():
+    """A size class whose RQ2 jobs all failed or were uncertified: N_I cannot be planned."""
+    inst = planted_instance_table(10, {}, SD, seed=0, size_classes=(20, 40))
+    rq2 = planted_rq2_table(10, 1.0, SD, seed=1, size_classes=(20,))
+
+    plan = analysis.precision_plan(inst, rq2=rq2)
+
+    at_40 = plan[plan["size_class"] == 40].set_index("contrast")["n_required"]
+    assert pd.isna(at_40["h3"]) and pd.isna(at_40["max"])
+    assert pd.notna(plan[(plan["size_class"] == 20) & (plan["contrast"] == "max")]["n_required"].iloc[0])
+
+
+def test_precision_plan_without_rq2_has_no_h3_row():
+    plan = analysis.precision_plan(planted_instance_table(10, {}, SD, seed=0))
+
+    assert "h3" not in set(plan["contrast"])
+
+
+def test_rq2_table_has_the_arm_sums():
+    assert {"U_anchored", "U_chained"} <= set(analysis.rq2_table([]).columns)
+

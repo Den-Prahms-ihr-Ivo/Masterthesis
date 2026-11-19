@@ -124,24 +124,28 @@ def planted_rq2_table(
 ) -> pd.DataFrame:
     """Create one complete RQ2 row per instance, with D ~ Normal(effect, sd).
 
-    Only D represents a planted effect. Other outcomes are placeholders;
-    there is no reconstructed schedule trajectory. Persistence is NaN.
+    Only D represents a planted effect. U_chained ~ Normal(100, sd) and U_anchored =
+    U_chained + D, so D = U_anchored - U_chained holds as in metrics.rq2_row. Other
+    outcomes are placeholders; there is no reconstructed schedule trajectory.
+    Persistence is NaN.
     """
     _validate(n_instances, sd)
     effect = _effect(effect)
     rng = np.random.default_rng(seed)
     columns = [
         "cell", "size_class", "instance", "sequence", "prefix", "eligible_primary",
-        "D", "D_pre", "P", "lock_in", "delta_u_6",
+        "D", "D_pre", "P", "lock_in", "delta_u_6", "U_anchored", "U_chained",
     ]
     rows = []
     for size in size_classes:
         draws = rng.normal(effect, sd, size=n_instances)
-        for instance, draw in enumerate(draws):
+        chained = rng.normal(100.0, sd, size=n_instances)
+        for instance, (draw, u_chained) in enumerate(zip(draws, chained)):
             rows.append({
                 "cell": "rq2", "size_class": size, "instance": instance,
                 "sequence": 0, "prefix": 15, "eligible_primary": True,
                 "D": float(draw), "D_pre": 0.0, "P": np.nan,
                 "lock_in": False, "delta_u_6": 0.0,
+                "U_anchored": float(u_chained + draw), "U_chained": float(u_chained),
             })
     return pd.DataFrame(rows, columns=columns)

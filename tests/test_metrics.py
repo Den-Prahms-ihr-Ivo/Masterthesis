@@ -540,6 +540,7 @@ def test_rq2_row_sums_and_lock_in():
 
     assert set(row) == set(metrics.RQ2_KEYS)
     assert (row["D"], row["D_pre"], row["delta_u_6"]) == (50, 1, 5)
+    assert (row["U_anchored"], row["U_chained"]) == (100, 50)  # 10 x 10 and 10 x 5
     assert row["P"] == Fraction(1)
     assert row["lock_in"] is True
     assert row["certified"] is True

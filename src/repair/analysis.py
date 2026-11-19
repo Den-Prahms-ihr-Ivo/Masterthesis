@@ -26,8 +26,14 @@ may reduce their difference. This motivates comparing preference-dominated
 (3/3/9) and availability-dominated (3/9/3) profiles; it is not guaranteed at
 every step, and the experiment tests whether the expected difference appears.
 
-Verdicts compare the interval with 0. If the frozen exposé's falsification rule has a
-materiality threshold, the comparison must use it instead (TODO IVO: check).
+Falsification rule (exposé §3, as sent): each component is "supported" if its 95 %
+interval excludes zero in the predicted direction, "contradicted" if it excludes zero
+the other way, and "inconclusive" otherwise; H1 needs both components supported; H2 is
+assessed per profile; for H1 the interval is on the difference between the two
+profiles' mean paired differences. Verdicts test against zero only: the sent exposé has
+no materiality threshold (theta_m was in earlier drafts only). Its one remaining 0.1
+pooled-SD figure (§4.7) is a precision target for N_I (precision_plan), never a verdict
+criterion.
 """
 
 from __future__ import annotations
@@ -44,7 +50,12 @@ from repair.model import SequenceResult, StageStatus
 
 Verdict = Literal["supported", "contradicted", "inconclusive"]
 
-# TODO IVO: set from the exposé's H1 sentence, word for word, then drop this TODO
+# Exposé §3, word for word: "H1 — Preference-driven trade-off. Compared with
+# availability-dominated sequences, preference-dominated sequences produce a larger mean
+# cumulative quality deficit of SF relative to QL, sum_t g^SF_t - sum_t g^QL_t, and a
+# larger mean excess cumulative churn of QL relative to SF, sum_t C^QL_t - sum_t C^SF_t."
+# Both components are (preference minus availability) of those paired differences, and
+# "larger" means positive.
 H1_EXPECTED = {"gap": +1, "churn": +1}
 PREDICTED_SIGN = {
     "h1_gap": H1_EXPECTED["gap"],
@@ -214,14 +225,18 @@ def sequence_table(results: Iterable[SequenceResult]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+# rq2_row values copied into rq2_table as they are (P is converted separately)
+RQ2_VALUES = ("D", "D_pre", "lock_in", "delta_u_6", "U_anchored", "U_chained")
+
+
 def rq2_table(results: Iterable[SequenceResult]) -> pd.DataFrame:
     """One row per RQ2 result: cell, size_class, instance, sequence, prefix,
-    eligible_primary, and metrics.rq2_row's D, D_pre, P, lock_in, delta_u_6 (P as float,
-    NaN for None). Non-RQ2 results are skipped.
+    eligible_primary, and metrics.rq2_row's D, D_pre, P, lock_in, delta_u_6, U_anchored,
+    U_chained (P as float, NaN for None). Non-RQ2 results are skipped.
     """
     columns = [
         "cell", "size_class", "instance", "sequence", "prefix", "eligible_primary",
-        "D", "D_pre", "P", "lock_in", "delta_u_6",
+        "D", "D_pre", "P", "lock_in", "delta_u_6", "U_anchored", "U_chained",
     ]
     rows = []
     for result in results:
@@ -238,12 +253,12 @@ def rq2_table(results: Iterable[SequenceResult]) -> pd.DataFrame:
             "sequence": result.sequence.seed,
             "prefix": prefix,
             "eligible_primary": prefix == horizon,
-            **dict.fromkeys(("D", "D_pre", "P", "lock_in", "delta_u_6"), np.nan),
+            **dict.fromkeys(RQ2_VALUES + ("P",), np.nan),
         }
         # An early stop has no complete D or P. Keep its metadata for exclusions.
         if result.trajectories and all(len(t.steps) >= 15 for t in result.trajectories):
             values = metrics.rq2_row(result)
-            row.update({key: values[key] for key in ("D", "D_pre", "lock_in", "delta_u_6")})
+            row.update({key: values[key] for key in RQ2_VALUES})
             row["P"] = _as_float(values["P"])
         rows.append(row)
     return pd.DataFrame(rows, columns=columns)
@@ -422,18 +437,25 @@ def required_instances(
     return math.ceil((z * sd_diff / (fraction * pooled_sd)) ** 2)
 
 
-def precision_plan(pilot_inst: pd.DataFrame, fraction: float = 0.1) -> pd.DataFrame:
-    """Required N_I per contrast and size class from a pilot instance table.
+def precision_plan(
+    pilot_inst: pd.DataFrame, fraction: float = 0.1, rq2: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Required N_I per contrast and size class from a pilot instance table (and, for
+    H3, the pilot's rq2_table).
 
     Contrasts: H1 gap and churn (their per-instance difference of differences), H2 per
-    profile. sd_dif and only if = sample SD (ddof = 1) of the per-instance contrast. For H1 that is
+    profile, and with rq2 also H3: D per instance (averaged over its eligible_primary
+    sequences, as in evaluate_h3), pooled SD over the two arms' U_anchored and U_chained
+    (DESIGN.md 13.8: D is already a difference, so pool the arms' sum of U_t over
+    t = 6..15). A size class with main rows but no eligible RQ2 row gets an undefined
+    h3 row, so its "max" is undefined too. sd_dif and only if = sample SD (ddof = 1) of the per-instance contrast. For H1 that is
     sd of (SF - QL)_pref - (SF - QL)_avail per instance: the same instances run both
     profiles, so it includes their covariance and is NOT sqrt(2) times a per-profile
     SD. pooled_sd =
     sqrt((sd_a^2 + sd_b^2) / 2) of the two per-instance quantities whose difference the
     contrast is (DESIGN.md 13.8): for H2 gini(hwf) and gini(sf); for H1 the arm
     difference at "preference" and at "availability".
-    Contrast names: "h1_gap", "h1_churn", "h2_<profile>".
+    Contrast names: "h1_gap", "h1_churn", "h2_<profile>", "h3".
     Columns: size_class, contrast, sd_diff, pooled_sd, n_required.
     One extra row per size class with contrast "max": the N_I to plan with.
     """
@@ -458,6 +480,11 @@ def precision_plan(pilot_inst: pd.DataFrame, fraction: float = 0.1) -> pd.DataFr
             pairs = _arm_pairs(size_data.loc[size_data["profile"] == profile], HWF, SF, "gini")
             size_rows.append(_precision_row(
                 size, f"h2_{profile}", pairs["a"], pairs["b"], fraction
+            ))
+        if rq2 is not None:
+            h3 = _h3_per_instance(rq2, size)
+            size_rows.append(_precision_row(
+                size, "h3", h3["U_anchored"], h3["U_chained"], fraction
             ))
         rows.extend(size_rows)
         requirements = [row["n_required"] for row in size_rows]
@@ -557,6 +584,16 @@ def _evaluate_h2(inst: pd.DataFrame, hwf: str, sf: str, metric: str, seed: int) 
             row[f"{side}_diff"] = float((side_pairs["a"] - side_pairs["b"]).mean())
         rows.append(row)
     return pd.DataFrame(rows, columns=columns)
+
+
+def _h3_per_instance(rq2: pd.DataFrame, size) -> pd.DataFrame:
+    """U_anchored and U_chained averaged within instance over the eligible_primary RQ2
+    rows of one size class: the same selection and unit as evaluate_h3."""
+    selected = rq2.loc[rq2["eligible_primary"].eq(True) & (rq2["size_class"] == size)]
+    values = selected[["instance", "U_anchored", "U_chained"]].astype(
+        {"U_anchored": float, "U_chained": float}
+    )
+    return values.groupby("instance", sort=True).mean()
 
 
 def _precision_row(size, name: str, a: pd.Series, b: pd.Series, fraction: float) -> dict:

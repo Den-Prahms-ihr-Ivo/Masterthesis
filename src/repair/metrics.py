@@ -378,14 +378,16 @@ def persistence(
     return Fraction(len(kept), len(changed))
 
 
-RQ2_KEYS = ("D", "D_pre", "P", "lock_in", "delta_u_6", "certified")
+RQ2_KEYS = ("D", "D_pre", "P", "lock_in", "delta_u_6", "U_anchored", "U_chained", "certified")
 
 
 def rq2_row(result: SequenceResult) -> dict[str, Any]:
     """Compare anchored and chained outcomes over the 15 RQ2 steps.
 
     D sums quality differences (anchored minus chained) over steps 6..15;
-    D_pre uses steps 2..5. Lock-in needs both positive persistence and a better
+    D_pre uses steps 2..5. U_anchored and U_chained are each arm's own sum of U_t over
+    steps 6..15 (so D = U_anchored - U_chained); the precision plan pools their SDs for
+    H3 (DESIGN.md 13.8). Lock-in needs both positive persistence and a better
     anchored schedule at step 6. A persistent difference alone is not enough.
 
     The returned certification flag checks the arm stages. analysis.certified_prefix
@@ -410,14 +412,20 @@ def rq2_row(result: SequenceResult) -> dict[str, Any]:
         raise ValueError("RQ2 requires at least 15 events")
 
     instances_t = instances_along(result.instance, result.sequence.events[:15])
-    deltas = [
+    u_anchored = [
         oracle.quality(anchored.steps[t].schedule, instance_t)
-        - oracle.quality(chained.steps[t].schedule, instance_t)
         for t, instance_t in enumerate(instances_t)
     ]
+    u_chained = [
+        oracle.quality(chained.steps[t].schedule, instance_t)
+        for t, instance_t in enumerate(instances_t)
+    ]
+    deltas = [a - c for a, c in zip(u_anchored, u_chained)]
     p = persistence(result.s0, anchored, chained)
     return {
         "D": sum(deltas[5:15]),
+        "U_anchored": sum(u_anchored[5:15]),
+        "U_chained": sum(u_chained[5:15]),
         "D_pre": sum(deltas[1:5]),
         "P": p,
         "lock_in": p is not None and p > 0 and deltas[5] > 0,

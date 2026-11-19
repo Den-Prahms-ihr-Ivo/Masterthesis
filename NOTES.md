@@ -55,7 +55,7 @@
     contradiction needs one), so "supported" needs no multiplicity correction.
   - Still open: the exact H1 direction (`analysis.H1_EXPECTED`, expected +1 for both
     components) and whether the falsification rule has a materiality threshold
-    instead of 0; both must be checked against the frozen exposé text.
+    instead of 0; both must be checked against the frozen exposé text. (Closed 2026-11-19, see there.)
 
 ## 2026-11-14
 
@@ -114,3 +114,55 @@
   - **Not runnable yet: `pilot.toml`.** It lists robustness and undersupplied without
     `robustness_scale` / `workforce_factor`, so `jobs()` refuses. To decide before the pilot
     (MAIN_RUN_CHECKLIST.md, D).
+
+## 2026-11-18
+
+- **H3 in the precision plan (DESIGN.md 13.8), implemented.** `metrics.rq2_row` now also
+  returns each arm's own sum of U_t over t = 6..15 (`U_anchored`, `U_chained`;
+  D = U_anchored - U_chained), and `rq2_table` carries them. `precision_plan(..., rq2=)`
+  adds an "h3" row per size class: sd_diff = SD of D per instance, pooled SD over the two
+  arms' sums, the same selection and unit as `evaluate_h3` (eligible_primary rows,
+  averaged within instance). H3 counts for the "max" row, so N_I covers H1, H2 and H3; a
+  size class without eligible RQ2 rows makes its N_I undefined, and plan_precision stops.
+  Until now N_I would have been planned from H1 and H2 alone.
+- **plan_precision.py and calibrate.py fixed** against the new tests: coverage records
+  (`CoverageStep.record`), the DataFrame plan, zero-count stages, phi = 1 refused by the
+  grid check. On a real tiny SCIP run the solve counts match DESIGN.md §7 exactly (210 per
+  main sequence, 105 per RQ2 sequence).
+- **Pilot cells: main + rq2 (decided).** robustness and undersupplied need the values the
+  pilot phase calibrates, so `jobs()` cannot build them in `pilot.toml`. `calibrate.py`
+  reads only the protocol (runs before or next to the pilot), and `plan_precision.py`
+  costs those cells like main jobs with the same size and arm count. Reverting this means
+  provisional values in `pilot.toml`.
+- **Still open for the pilot:** its τ (60 s vs. the main run's 600 s; stage times and
+  certification depend on it) and its counts (placeholders 2 / 2). MAIN_RUN_CHECKLIST.md D.
+- `DESIGN.md` and `ROADMAP.md` copied from the old project, because code and SERVER.md
+  cite them; DESIGN.md §7 "Running and monitoring" updated to the current run control.
+
+## 2026-11-19
+
+- **H1 direction and falsification rule checked against the sent exposé (§3).** H1 word
+  for word: "Compared with availability-dominated sequences, preference-dominated
+  sequences produce a larger mean cumulative quality deficit of SF relative to QL,
+  sum_t g^SF_t - sum_t g^QL_t, and a larger mean excess cumulative churn of QL relative to
+  SF, sum_t C^QL_t - sum_t C^SF_t." So `H1_EXPECTED = {"gap": +1, "churn": +1}` (preference
+  minus availability > 0) was right; now quoted in `analysis.py` and pinned by
+  `test_predicted_signs_are_the_exposes`. The rule: a component is supported / contradicted
+  if its 95 % interval excludes zero in / against the predicted direction, inconclusive
+  otherwise; H1 needs both components supported; H2 per profile; the H1 interval is on the
+  difference between the two profiles' mean paired differences. The code already did
+  exactly this (`verdict`, `evaluate_h1`).
+- **No materiality threshold.** The materiality table and theta_m were in earlier drafts
+  only, not in the sent exposé. Verdicts test against zero only
+  (`test_verdicts_test_against_zero_only`); the code never had a theta constant or a
+  materiality classification, only a TODO that is now gone. What remains in §4.7 is the
+  precision target: each primary contrast's 95 % interval should have a half-width of at
+  most 0.1 pooled SDs of its outcome (the old theta_m / 2 with theta_m = 0.2 SD). It only
+  sets N_I: `required_instances` = ceil((1.96 sigma_d / (0.1 s_pool))^2), as implemented.
+  The thesis must not describe 0.1 SD as a threshold for meaningful effects.
+- **Pilot tau = 600 s (was 60 s).** §4.7: "the time limit of 600 s per solve stage". Not a
+  judgement call: at 60 s the pilot would measure stage times and certification for a
+  different run. `pilot.toml` and `main.toml` now share their solver settings (tested).
+  Only `dry-run.toml` keeps 60 s (Gate M3 tests machinery, not timing). Gate 2.5 was run at
+  60 s on pilot.toml; that entry stays valid for what it measured.
+- **Left open for the pilot:** only its sizes (`n_instances`, `n_sequences`).

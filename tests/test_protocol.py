@@ -140,11 +140,22 @@ def test_load_pilot_toml():
     assert p.n_instances == {20: 2, 40: 2, 80: 2}
     assert all(isinstance(key, int) for key in p.n_instances)
     assert p.size_classes == (20, 40, 80)
-    assert p.cells == protocol.CELLS
+    assert p.cells == ("main", "rq2")  # the calibrated cells are not piloted (NOTES 2026-11-18)
     assert p.robustness_scale is None  # left out -> None
     assert p.workforce_factor is None
     assert p.generator == protocol.GeneratorConfig()  # no [generator] -> defaults
-    assert p.solver == protocol.SolverSettings(time_limit=60.0, s0_time_limit=60.0)
+    assert p.solver == protocol.SolverSettings(time_limit=600.0, s0_time_limit=600.0)
+
+
+def test_pilot_and_main_share_the_solver_settings():
+    """Exposé §4.7: "the time limit of 600 s per solve stage". The pilot measures stage
+    times and certification rates for the main run, so its solver settings must be the
+    main run's (dry-run.toml is the only protocol with a shorter tau)."""
+    pilot = protocol.load_protocol(PILOT).solver
+    main = protocol.load_protocol(PROTOCOL_DIR / "main.toml").solver
+
+    assert pilot == main
+    assert main.time_limit == main.s0_time_limit == 600.0
 
 
 def test_load_rejects_unknown_key(tmp_path):
@@ -243,9 +254,11 @@ MAIN_PROFILES = (
 
 
 def _matrix_protocol(**changes):
-    """The pilot with calibrated values set and unequal counts per size class."""
+    """The pilot with all four cells, calibrated values set and unequal counts per size
+    class."""
     base = replace(
         protocol.load_protocol(PILOT),
+        cells=protocol.CELLS,
         n_instances={20: 2, 40: 3, 80: 1},
         n_sequences=2,
         n_instances_secondary=2,

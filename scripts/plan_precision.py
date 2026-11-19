@@ -1,14 +1,14 @@
-"""Work in progress: estimate sample sizes and runtime from pilot results.
+"""Estimate sample sizes and runtime from pilot results.
 
-The intended calculation uses the spread of paired contrasts to choose
-N_I, then combines stage times and planned solve counts to estimate core
-hours against the 1,000-hour budget. It should not select the sample size
+The calculation uses the spread of the paired contrasts (H1, H2 and H3; DESIGN.md
+13.8) to choose N_I per size class, then combines stage times and planned solve counts
+to estimate core hours against the 1,000-hour budget. It never selects the sample size
 from observed effect directions.
 
-This script still needs to be connected to the current analysis output.
-In particular, precision_plan() returns a DataFrame, but main() below still
-treats it as iterable row objects. The H3 precision calculation is also
-missing. Do not use this command as a completed pilot decision step yet.
+    PYTHONPATH=src .venv/bin/python scripts/plan_precision.py results/pilot \
+        --protocol protocol/pilot.toml
+
+Exit status 0 if the projection fits BUDGET_CORE_HOURS, 1 if not.
 """
 
 import dataclasses
@@ -37,13 +37,13 @@ def projected_core_hours(
     )
     if missing:
         raise ValueError(f"no pilot timing for {missing}")
-    return sum(stage_seconds[key] * count for key, count in matrix.items()) / 3600.0
+    return sum(stage_seconds[key] * count for key, count in matrix.items() if count) / 3600.0
 
 
 def _stages(result):
     """Yield the shared coverage records, then every arm's stage records."""
-    for step in result.coverage:  # Coverage entries store their own stage records.
-        yield from step.stages
+    for step in result.coverage:  # a CoverageStep holds exactly one record
+        yield step.record
     for trajectory in result.trajectories:
         for step in trajectory.steps:
             yield from step.stages
@@ -106,19 +106,38 @@ def main(argv: list[str] | None = None) -> int:
     results = list(storage.read_results(args.pilot_results))
     pilot = protocol_module.load_protocol(args.protocol)
 
-    # 1. Precision: required N_I per size class and contrast, from dispersion only.
-    instance_table = analysis.instance_table(
-        analysis.sequence_table(results)
-    )  # sequence_table and instance_table currently return DataFrames.
+    # Every size class of the protocol needs pilot results: without them neither N_I
+    # nor the certification share nor the timing exists (e.g. every n = 40 job failed).
+    measured = {result.instance.meta.size_class for result in results}
+    missing = [size for size in pilot.size_classes if size not in measured]
+    if missing:
+        raise ValueError(
+            "no pilot results for " + ", ".join(f"n={size}" for size in missing)
+        )
+
+    # 1. Precision: required N_I per size class and contrast (H1, H2, H3), from
+    # dispersion only. A DataFrame: size_class, contrast, sd_diff, pooled_sd, n_required
     plan = analysis.precision_plan(
-        instance_table
-    )  # TODO: main() below must iterate DataFrame rows, not column names.
-    n_instances = {}
+        analysis.instance_table(analysis.sequence_table(results)),
+        rq2=analysis.rq2_table(results),
+    )
+    n_instances: dict[int, int] = {}
     for size in pilot.size_classes:
-        rows = [row for row in plan if row.size_class == size]
-        for row in rows:
-            print(f"n={size}  {row.contrast:<28} N_I >= {row.n_required}")
-        n_instances[size] = max(row.n_required for row in rows)
+        rows = plan[plan["size_class"] == size]
+        contrasts = rows[rows["contrast"] != "max"]
+        for row in contrasts.itertuples():
+            needed = "undefined" if row.n_required != row.n_required else int(row.n_required)
+            print(f"n={size}  {row.contrast:<28} N_I >= {needed}")
+        maximum = rows.loc[rows["contrast"] == "max", "n_required"]
+        if len(maximum) != 1 or maximum.isna().any():
+            # precision_plan leaves "max" undefined when any contrast is (fewer than two
+            # instances, or a contrast with zero spread): never plan with NaN
+            undefined = contrasts.loc[contrasts["n_required"].isna(), "contrast"]
+            raise ValueError(
+                f"n={size}: N_I is undefined; no usable SD for "
+                f"{', '.join(undefined) or 'any contrast (no rows)'}"
+            )
+        n_instances[size] = int(maximum.item())
         print(f"n={size}  N_I = {n_instances[size]}")
 
     # 2. Adequacy input: share of sequences certified through T, per size class.
@@ -141,9 +160,9 @@ def main(argv: list[str] | None = None) -> int:
         pilot,
         cells=protocol_module.CELLS,
         n_instances=n_instances,
-        robustness_scale=pilot.robustness_scale
-        or 1,  # Temporary values for counting jobs only;
-        workforce_factor=pilot.workforce_factor or 1.0,  # these are not calibrated run settings.
+        # placeholders, only so that jobs() can count the matrix; never run settings
+        robustness_scale=pilot.robustness_scale or 1,
+        workforce_factor=pilot.workforce_factor or 1.0,
     )
     hours = projected_core_hours(
         mean_seconds, planned_matrix(protocol_module.jobs(planned), mean_solves)
