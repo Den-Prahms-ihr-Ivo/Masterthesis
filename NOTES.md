@@ -1,168 +1,159 @@
-# Decision log
+# Notes / decisions
 
 ## 2026-11-01
 
-- Official thesis start. Repository created.
+Thesis started. Repository created.
 
 ## 2026-11-13
 
-- **Open choice 13.9 (P2/P3 with fewer than k eligible targets): top up.** Take every
-  eligible target, then fill up to k from the independent-targeting set (P2: any currently
-  available pair; P3: any (w, r) pair), and flag the event (`fallback=True` on
-  `AvailabilityRemoval` / `PreferenceChange`). If even that set is too small: `ValueError`.
-  Reason: every event keeps intensity k, consistent with the P1 fallback; the flag lets the
-  pilot report how often S0-targeting had to be relaxed. The pinned digest in
-  `test_model.py` changed because of the new field (no stored results existed yet).
-- **Gate 2.5 (acceptance with SCIP): passed.** `scripts/acceptance_check.py`, pilot.toml
-  (root_seed 20261109), 20 base seeds per size class, tau = S0 limit = 60 s,
-  max_draws 100. SCIP 10.0.2 / PySCIPOpt 6.3.0, Apple M1, 1 thread; 57 s in total.
+**P2/P3 fallback (13.9)**
 
-  | n  | accepted | draws | rejected (Λ\*₀ > 0) | reserve used | S0 certified | accept s | S0 s |
-  | -- | -------- | ----- | ------------------- | ------------ | ------------ | -------- | ---- |
-  | 20 | 20       | 21    | 1 (4.8 %)           | 0            | 20/20        | 2.0      | 7.7  |
-  | 40 | 20       | 20    | 0                   | 0            | 20/20        | 3.4      | 13.2 |
-  | 80 | 20       | 20    | 0                   | 0            | 20/20        | 6.3      | 23.7 |
+Take all eligible targets, then fill up to `k` from the independent set. P2: currently available pairs. P3: any `(w, r)` pair. Set `fallback=True`; if there are still too few, raise `ValueError`.
 
-  Rejections are rare, so the coverage acceptance barely filters the main classes. Not
-  yet measured: the under-supplied class (needs a calibrated phi).
-- **Gate M2: passed.** `scripts/m2_gate.py`, pilot.toml, n = 20, instance index 0
-  (accepted at the first draw, S0 certified). SCIP 10.0.2 / PySCIPOpt 6.3.0, Apple M1,
-  tau = 60 s; 37 s in total. One balanced RQ1 sequence through QO, SF, QL, WQS(2),
-  HWF(1) (all chained) and one RQ2 sequence through SF-anchored and SF-chained: every
-  arm ran all 15 steps, every step certified, no retries, Lambda = Lambda*_t throughout
-  (RQ1: Lambda* = 0 at every step; RQ2: Lambda* = 1 at steps 4-5), both result files
-  round-trip. Also covered by `test_m2_gate_n20_sequences_with_scip` (slow, solver).
-- **Open choice 13.7 (persistence P_{1,6}): closed by Table A2.** A2 defines it as "the
-  share of cells changed by the chained arm at step 1 that stay unchanged through step 6
-  while the anchored arm differs at step 6", which is the reading `metrics.persistence`
-  implements. Also from A2: A_t = sum_w c_{w,t} is a count of affected volunteers, not a
-  share (the metrics stub said share; corrected before implementation).
-- **Open choice 13.8 (pooled SD in the precision plan): decided for H1 and H2.**
-  - The target half-width is 0.1 x pooled SD. For **H1** the pooled SD is taken over the
-    per-instance ARM DIFFERENCE at "preference" and at "availability", not over the raw
-    SF and QL levels. Reason: QL's first stage is MaxQuality under the same Lambda cap,
-    so QL's gap is 0 on certified steps; pooling raw SF and QL gaps would mix in a
-    zero-variance arm and shrink the SD by about sqrt(2). For **H2** it is pooled over
-    gini(HWF) and gini(SF).
-  - Inconsistency to note in the thesis: the D_i rule of 13.8 pools the two arms' raw
-    levels (sum_{t=6..15} U_t). That is fine there (neither arm has zero variance), but
-    a reader will see the two rules differ; state both reasons.
-  - The sample size uses a different SD: N_I = ceil((1.96 * sigma_DiD / half-width)^2),
-    with sigma_DiD the SD of the per-instance difference of differences. The same
-    instances run both profiles, so sigma_DiD includes their covariance and is not
-    sqrt(2) times a per-profile SD (`test_precision_plan_uses_difference_of_differences_sd`).
-  - H1 joint verdict: intersection-union rule (support needs both components,
-    contradiction needs one), so "supported" needs no multiplicity correction.
-  - Still open: the exact H1 direction (`analysis.H1_EXPECTED`, expected +1 for both
-    components) and whether the falsification rule has a materiality threshold
-    instead of 0; both must be checked against the frozen exposé text. (Closed 2026-11-19, see there.)
+Same event size as planned, and the pilot can count the fallbacks. Updated the digest in `test_model.py` for the new field. No saved results yet.
+
+**Gate 2.5 passed**
+
+`acceptance_check.py`, `pilot.toml`, root seed 20261109. Twenty base seeds per size, coverage and S0 limits 60 s, `max_draws=100`.
+
+SCIP 10.0.2 / PySCIPOpt 6.3.0, Apple M1, one thread. Total: 57 s.
+
+| n   | Accepted | Draws | Rejected | Reserve used | S0 certified | Acceptance (s) | S0 (s) |
+| --- | -------- | ----- | -------- | ------------ | ------------ | -------------- | ------ |
+| 20  | 20       | 21    | 1 (4.8%) | 0            | 20/20        | 2.0            | 7.7    |
+| 40  | 20       | 20    | 0        | 0            | 20/20        | 3.4            | 13.2   |
+| 80  | 20       | 20    | 0        | 0            | 20/20        | 6.3            | 23.7   |
+
+Only one rejection, from positive minimum shortfall. Main instances mostly pass directly. Under-supplied still needs phi.
+
+**Gate M2 passed**
+
+`m2_gate.py`, `pilot.toml`, n=20, instance 0. First draw accepted, S0 certified. Same setup as above, 60 s per stage, 37 s total.
+
+- Balanced RQ1: QO, SF, QL, WQS(2), HWF(1), chained where applicable.
+- RQ2: SF-anchored and SF-chained.
+- All 15 steps certified, no retries, every repair reached `Lambda*_t`.
+- RQ1 shortfall always 0. RQ2 shortfall 1 at steps 4–5.
+- Both saved files loaded correctly. Passt erstmal.
+
+Test: `test_m2_gate_n20_sequences_with_scip` (`slow`, `solver`).
+
+**Persistence (13.7)**
+
+Table A2 agrees with `metrics.persistence`: cells changed by chained at step 1 must keep that value through step 6 and differ from anchored at step 6.
+
+Also: `A_t = sum_w c_{w,t}` counts affected volunteers. Not a share. Corrected the stub.
+
+**Precision plan (13.8)**
+
+Target half-width: `0.1 * pooled SD`.
+
+- H1: pool the per-instance arm differences from preference and availability. Raw SF/QL gaps would include QL's constant zero gap and shrink the SD by about `sqrt(2)`.
+- H2: pool `gini(HWF)` and `gini(SF)`.
+- H3: pool the arms' quality sums over steps 6–15. These are not fixed at zero. Explain why this differs from H1.
+
+For H1: `N_I = ceil((1.96 * sigma_DiD / half_width)^2)`. Use the SD of the actual difference of differences. Same instances in both profiles means covariance matters; `sqrt(2) * profile SD` is not enough.
+
+Test: `test_precision_plan_uses_difference_of_differences_sd`.
+
+H1 needs both components supported; one contradicted component contradicts H1. No multiplicity correction needed for support under this intersection-union rule.
+
+H1 signs and materiality threshold still needed checking. Done on 19 November, below.
 
 ## 2026-11-14
 
-- **Run control (step 4.4), decided:**
-  - **Abort-worthy errors share a base class**, `model.SystematicError`
-    (`runner.OracleMismatch`, `storage.ManifestMismatch`). The worker aborts on
-    `SystematicError` or `AssertionError`; a new check only needs to subclass it.
-  - **Breaker for unclassified bugs:** the same error type and message in
-    `BREAKER_THRESHOLD` = 5 failure files triggers the abort as well (e.g. a `KeyError` in
-    every job), instead of logging it for days.
-  - **What an abort does to running jobs:** they FINISH (no new job starts). That wastes
-    at most one job per worker and keeps every file complete. `KeyboardInterrupt` and
-    `SystemExit` are never caught; atomic writes leave at most a temp file, and a restart
-    redoes the job.
-  - **Resuming:** the first start writes `<results>/manifest.json`; a later start with a
-    different protocol hash, commit, clean flag, solver or Python version, CPU model or
-    worker count is refused (`ManifestMismatch`). Moving the file away is a deliberate,
-    logged decision.
-- **Seeds:** `derive_seed` is pinned by a golden test. `m2_gate.py` now uses the run's
-  scheme (`instance_seeds`, `sequence_seed`) under its own root `gate_root(protocol)`, so
-  there is one seed scheme and the gate's instances are disjoint from the run's (tested).
-  Consequence: rerunning `m2_gate.py` now draws a different instance than the run logged
-  for Gate M2 above (seed 3865029198492689663). That entry stays valid as the record of the
-  run it describes. `acceptance_check.py` uses `instance_seeds` and gives the same seeds as
-  before.
-- **Monitor:** failures are mailed in one batch per poll (keys and error types; each key
-  once), because one mail per job could exceed Gmail's ~500 mails/day and delay the abort
-  mail. Every monitor start sends one summary mail (results, failures by type, ABORT), so
-  nothing that happened while it was down goes unreported. **For SERVER.md:** the stall
-  timer starts at the monitor's (re)start, so a run that was already stalled gets a full
-  grace period again. (Now in SERVER.md §8.)
-- **Gate M3 preparation (rehearsal tooling and two fixes found with it):**
-  - **Ctrl-C inside SCIP is an interrupt, not a failure.** SCIP catches SIGINT itself and
-    returns status "userinterrupt"; `milp._status` raised `ValueError` for it, so a Ctrl-C
-    wrote one identical failure file per interrupted worker (seen locally: 2 files from
-    one Ctrl-C with 2 workers). With 48 workers that trips the breaker and writes ABORT.
-    Now re-raised as `KeyboardInterrupt`; six Ctrl-Cs at different moments left no
-    failure file and no ABORT.
-  - **Monitor flags re-arm.** `abort_sent` stayed True for good, so after the abort
-    procedure (fix, `rm ABORT`, resume) a second abort would have been silent; the same for
-    a job that fails again after a successful rerun. `decide` now sets `abort_sent` and
-    `failures_sent` from what is on disk: present = mailed, gone = re-armed. This amends the
-    "each key once" rule above: once per failure file.
-  - **Planted failures** (`REPAIR_PLANT_FAILURE="<job key>:error|assert,..."`) for the
-    rehearsal's failure and abort mails. `run_experiment.py` refuses them with `--main`,
-    on a typo, or for a job key that is not selected, and records them in the manifest.
-  - **`scripts/rerun_check.py`** for the determinism criterion. It compares exactly the
-    inputs, Lambda*_t and every arm's schedules and stage (name, status, value); never
-    seconds, bounds, `retried` or the manifest. A coverage or arm stage that hit its time
-    limit makes the outcome timing-dependent, so that step and the arm's later steps are
-    reported as "not compared", not as a difference.
-  - **`protocol/dry-run.toml`**: n = 20, 3 instances, tau = 60 s, main + rq2, 183 jobs.
-    Locally (Apple M1, 2 workers) about 24 s per main job and 8 s per rq2 job, so roughly
-    18 min on a CCX23. A local shard run with 2 workers, a planted error, a resume and
-    `rerun_check` (2 jobs identical) all behaved as SERVER.md §9 expects.
-  - **Not runnable yet: `pilot.toml`.** It lists robustness and undersupplied without
-    `robustness_scale` / `workforce_factor`, so `jobs()` refuses. To decide before the pilot
-    (MAIN_RUN_CHECKLIST.md, D).
+**Run control**
+
+- `SystematicError` (`OracleMismatch`, `ManifestMismatch`) and `AssertionError` set ABORT.
+- Same error type + message in five failure files also sets ABORT (`BREAKER_THRESHOLD=5`). No point running the same bug for days.
+- ABORT stops new jobs. Running jobs finish.
+- Ctrl-C and `SystemExit` are not caught. Atomic writes protect finished files; unfinished jobs run again after restart.
+- Resume checks `<results>/manifest.json`: protocol hash, commit, clean flag, solver/Python versions, CPU and workers must match. If I move the manifest away deliberately, write down why. Sicher ist sicher.
+
+**Seeds**
+
+Pinned `derive_seed` with fixed test values. M2 now uses the normal seed helpers under `gate_root(protocol)`. Tests check separation from the run seeds.
+
+M2 therefore draws a different instance now. Keep the earlier result for seed 3865029198492689663 as the historical record. Acceptance-check seeds stay the same.
+
+**Monitor**
+
+One combined failure mail per poll, with job keys and error types. Avoid hitting the mail limit before the ABORT mail gets through.
+
+Every start sends a summary. Restart also resets the stall timer, giving another full grace period. Documented in SERVER.md §8.
+
+**M3 preparation**
+
+Found two bugs:
+
+- SCIP returns `userinterrupt` for Ctrl-C. `_status` raised `ValueError`, producing a failure file per worker. Changed to `KeyboardInterrupt`. Six interrupt attempts: no failures or ABORT.
+- Monitor flags stayed set after recovery. `decide` now follows the files on disk. Removing a failure/ABORT file allows a later occurrence to trigger mail again.
+
+Added planted failures: `REPAIR_PLANT_FAILURE="<job key>:error"` or `:assert`, comma-separated for several jobs. Logged in the manifest. Refused with `--main`, typos or unselected keys.
+
+`rerun_check.py` compares inputs, coverage, schedules and stage names/statuses/values. Ignore timings, bounds, retry flags and manifests. Time-limited steps and affected later steps are marked “not compared”.
+
+**Dry-run setup**
+
+`dry-run.toml`: n=20, three instances, 60 s per stage, main + RQ2, 183 jobs.
+
+M1, two workers: about 24 s/main job and 8 s/RQ2 job. CCX23 estimate: 18 minutes, not measured yet. Local shard test with error, resume and two identical reruns passed (SERVER.md §9).
+
+Pilot blocked for now: robustness and under-supplied need `robustness_scale` and `workforce_factor`. Decision below on 18 November.
 
 ## 2026-11-18
 
-- **H3 in the precision plan (DESIGN.md 13.8), implemented.** `metrics.rq2_row` now also
-  returns each arm's own sum of U_t over t = 6..15 (`U_anchored`, `U_chained`;
-  D = U_anchored - U_chained), and `rq2_table` carries them. `precision_plan(..., rq2=)`
-  adds an "h3" row per size class: sd_diff = SD of D per instance, pooled SD over the two
-  arms' sums, the same selection and unit as `evaluate_h3` (eligible_primary rows,
-  averaged within instance). H3 counts for the "max" row, so N_I covers H1, H2 and H3; a
-  size class without eligible RQ2 rows makes its N_I undefined, and plan_precision stops.
-  Until now N_I would have been planned from H1 and H2 alone.
-- **plan_precision.py and calibrate.py fixed** against the new tests: coverage records
-  (`CoverageStep.record`), the DataFrame plan, zero-count stages, phi = 1 refused by the
-  grid check. On a real tiny SCIP run the solve counts match DESIGN.md §7 exactly (210 per
-  main sequence, 105 per RQ2 sequence).
-- **Pilot cells: main + rq2 (decided).** robustness and undersupplied need the values the
-  pilot phase calibrates, so `jobs()` cannot build them in `pilot.toml`. `calibrate.py`
-  reads only the protocol (runs before or next to the pilot), and `plan_precision.py`
-  costs those cells like main jobs with the same size and arm count. Reverting this means
-  provisional values in `pilot.toml`.
-- **Still open for the pilot:** its τ (60 s vs. the main run's 600 s; stage times and
-  certification depend on it) and its counts (placeholders 2 / 2). MAIN_RUN_CHECKLIST.md D.
-- `DESIGN.md` and `ROADMAP.md` copied from the old project, because code and SERVER.md
-  cite them; DESIGN.md §7 "Running and monitoring" updated to the current run control.
+**H3 precision implemented (13.8)**
+
+`rq2_row` and `rq2_table` now include `U_anchored` and `U_chained`, summed over steps 6–15. `D = U_anchored - U_chained`.
+
+`precision_plan(..., rq2=)` uses SD(D) and the pooled SD of the arm sums. Same sample as `evaluate_h3`: eligible primary rows, averaged per instance. H3 now counts towards maximum `N_I`. No eligible RQ2 data for a size means undefined `N_I`, so planning stops. Previously only H1/H2 counted.
+
+**Script fixes**
+
+Fixed against the new tests: `CoverageStep.record`, DataFrame rows, zero-count stages and rejecting phi=1. Tiny SCIP run matched DESIGN.md §7: 210 solves/main sequence, 105/RQ2 sequence.
+
+**Pilot: main + RQ2 only**
+
+Other cells need calibration first. `calibrate.py` can run before or alongside the pilot. Runtime planning uses main jobs with matching size and arm count to estimate the other cells. Including them directly would need provisional protocol values.
+
+Noch offen: time limit (60 vs. 600 s) and counts (currently 2/2). MAIN_RUN_CHECKLIST.md D.
+
+Copied `DESIGN.md` and `ROADMAP.md` from the old project. Updated DESIGN.md §7 running/monitoring notes.
 
 ## 2026-11-19
 
-- **H1 direction and falsification rule checked against the sent exposé (§3).** H1 word
-  for word: "Compared with availability-dominated sequences, preference-dominated
-  sequences produce a larger mean cumulative quality deficit of SF relative to QL,
-  sum_t g^SF_t - sum_t g^QL_t, and a larger mean excess cumulative churn of QL relative to
-  SF, sum_t C^QL_t - sum_t C^SF_t." So `H1_EXPECTED = {"gap": +1, "churn": +1}` (preference
-  minus availability > 0) was right; now quoted in `analysis.py` and pinned by
-  `test_predicted_signs_are_the_exposes`. The rule: a component is supported / contradicted
-  if its 95 % interval excludes zero in / against the predicted direction, inconclusive
-  otherwise; H1 needs both components supported; H2 per profile; the H1 interval is on the
-  difference between the two profiles' mean paired differences. The code already did
-  exactly this (`verdict`, `evaluate_h1`).
-- **No materiality threshold.** The materiality table and theta_m were in earlier drafts
-  only, not in the sent exposé. Verdicts test against zero only
-  (`test_verdicts_test_against_zero_only`); the code never had a theta constant or a
-  materiality classification, only a TODO that is now gone. What remains in §4.7 is the
-  precision target: each primary contrast's 95 % interval should have a half-width of at
-  most 0.1 pooled SDs of its outcome (the old theta_m / 2 with theta_m = 0.2 SD). It only
-  sets N_I: `required_instances` = ceil((1.96 sigma_d / (0.1 s_pool))^2), as implemented.
-  The thesis must not describe 0.1 SD as a threshold for meaningful effects.
-- **Pilot tau = 600 s (was 60 s).** §4.7: "the time limit of 600 s per solve stage". Not a
-  judgement call: at 60 s the pilot would measure stage times and certification for a
-  different run. `pilot.toml` and `main.toml` now share their solver settings (tested).
-  Only `dry-run.toml` keeps 60 s (Gate M3 tests machinery, not timing). Gate 2.5 was run at
-  60 s on pilot.toml; that entry stays valid for what it measured.
-- **Left open for the pilot:** only its sizes (`n_instances`, `n_sequences`).
+**H1 checked against the sent exposé (§3)**
+
+Preference minus availability should be positive for both SF's excess quality gap and QL's excess churn. So `H1_EXPECTED = {"gap": +1, "churn": +1}` was correct. Exact wording now in `analysis.py`; test: `test_predicted_signs_are_the_exposes`.
+
+95% interval fully in the predicted direction: supported. Fully opposite: contradicted. Otherwise inconclusive. H1 needs both components, using the difference between profiles' mean paired differences. H2 is checked per profile. Code already matched this.
+
+**No materiality threshold**
+
+`theta_m` and its table were only in old drafts. Verdicts use zero. Removed the TODO; covered by `test_verdicts_test_against_zero_only`.
+
+The `0.1 * pooled SD` in §4.7 is the interval half-width target:
+
+`N_I = ceil((1.96 * sigma_d / (0.1 * s_pool))^2)`
+
+Nicht verwechseln: this sets sample size, not which effects are meaningful.
+
+**Pilot limit changed to 600 s**
+
+Matches §4.7 and the main run. At 60 s, pilot timings and certification would describe a different setup. Pilot/main solver settings now match, checked by a test.
+
+Dry run stays at 60 s. Old Gate 2.5 results still describe their original setup.
+
+Only pilot counts remain open: `n_instances`, `n_sequences`.
+
+**Laptop dry run passed**
+
+M1, two workers, tag `dry_run_1`, clean working tree. `dry-run.toml`: 183 jobs, three n=20 instances, 60 s/stage. Planted error at job 10, assertion at job 120, Ctrl-C at roughly 40%, then recovery.
+
+- 15:45–16:36, 51 minutes including stops and both restarts. Not compute time; estimate was 35 minutes of compute with two workers.
+- Progress/failure/health-check mails worked (R3, R6).
+- Ctrl-C/resume: no new failures (R4). ABORT stopped new jobs (R5).
+- Ten analysis tables (R1), identical reruns (R7), planted-effect tests passed (R8).
+
+Laptop done. Still test on the server: Linux worker startup (`fork`/`spawn`) and Ctrl-C inside SCIP (R4), `uv sync --locked`, Gmail port 587, health-check pings and CPU timings.
