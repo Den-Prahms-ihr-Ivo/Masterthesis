@@ -21,3 +21,9 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+implementation_order.md
+MAIN_RUN_CHECKLIST.md
+ROADMAP.md
+SERVER.md
+.gitignore
+Masterthesis.zip
