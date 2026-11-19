@@ -1,12 +1,11 @@
-# Main protocol TEMPLATE. Fill in after the pilot, set `date`, commit: that freezes the design.
-# load_protocol(..., require_frozen=True) refuses this file until every value below is filled:
-# - an empty date -> must be the ISO date of freezing
-# - every count = 0 -> must be > 0
-# - the calibrated values (commented out) -> must be set for the cells that need them
+# Main-run template. Fill this after the pilot and record the freeze date and
+# code commit. The zero counts below are placeholders, not a runnable design.
+# load_protocol(..., require_frozen=True) rejects an empty date, missing counts
+# and missing calibrated values required by the selected cells.
 
 name = "main"
 date = ""
-root_seed = 20261201 # chosen in advance; must differ from pilot.toml's root_seed
+root_seed = 20261201 # Chosen in advance; keep this separate from pilot draws.
 
 horizon = 15
 size_classes = [20, 40, 80]
@@ -20,7 +19,8 @@ alpha = "1"
 lam_grid = [1, 4]
 alpha_grid = ["1/2", "2"]
 
-# Calibrated in the pilot:
+# Set the required calibration values after the pilot. The optional values
+# can stay absent when their documented defaults are intended:
 # robustness_scale = 0      # needed by "robustness"
 # workforce_factor = 0.0    # needed by "undersupplied"
 # rq2_background_scale = 0  # optional: left out -> k = n/20

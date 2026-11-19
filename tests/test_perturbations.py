@@ -1,7 +1,8 @@
-"""perturbations.py: events produce a new instance; samplers follow the exposé 4.4 rules.
+"""Check event application and the sampling rules from exposé 4.4.
 
-The samplers only read which cells S0 contains, so most tests pass a small hand-made
-S0 (or _pseudo_s0 on a generated instance) instead of solving for the real one.
+Most sampler tests use a small hand-made S0 or a generated stand-in. The
+samplers need its assignment cells for targeting, not an optimal solution.
+Event application must leave the original instance unchanged.
 """
 
 import copy
@@ -68,7 +69,7 @@ def _kind(event):
     }[type(event)]
 
 
-# --- apply_event ---------------------------------------------------------------
+# Apply_event
 
 
 def test_apply_removal_returns_new_instance(repair_slice):
@@ -128,7 +129,8 @@ def test_demand_change_only_target_and_min_one():
 
 def test_removal_and_restoration_are_inverse():
     """Removal then restoration of the same pair gives back the original instance.
-    Removing an unavailable period or restoring an available one is refused."""
+    Removing an unavailable period or restoring an available one is refused.
+    """
     instance = _generated()
     volunteer = instance.volunteers[0]
     period = min(volunteer.available)
@@ -185,12 +187,13 @@ def test_instances_along_is_prefix_fold(repair_slice):
     assert instances_along(repair_slice, ()) == []
 
 
-# --- P2 and P3 -----------------------------------------------------------------
+# P2 and P3
 
 
 def test_p2_targets_assigned_available_distinct():
     """k distinct pairs, each S0-assigned and currently available; an already removed
-    pair and the excluded pair are never chosen."""
+    pair and the excluded pair are never chosen.
+    """
     instance = _generated()
     s0 = _pseudo_s0(instance)
     gone, excluded = sorted(_s0_pairs(instance, s0))[:2]
@@ -221,7 +224,8 @@ def test_p2_independent_any_available_pair():
 
 def test_p3_pairs_assigned_new_value_differs():
     """k distinct (w, r) pairs worked together in S0; the new value differs from the
-    current one, and both other values occur."""
+    current one, and both other values occur.
+    """
     instance = _generated()
     s0 = _pseudo_s0(instance)
     excluded = min(w for w, _ in s0)
@@ -243,7 +247,7 @@ def test_p3_pairs_assigned_new_value_differs():
         assert {new for c, new in seen if c == current} == {0, 1, 2} - {current}
 
 
-# --- P1 ------------------------------------------------------------------------
+# P1
 
 
 def _p1_instance():
@@ -300,7 +304,8 @@ def test_p1_builds_on_current_demand():
 
 def test_p1_increase_fallback_flagged():
     """Every shift is overstaffed in S0 (3 > d = 2): increases fall back to any shift open
-    in S0 and are flagged; decreases are possible and unflagged."""
+    in S0 and are flagged; decreases are possible and unflagged.
+    """
     grid = Grid(n_periods=1, n_roles=2)
     instance = grid.instance(
         grid.volunteers(6), [make_shift(i, role=i, demand=2) for i in range(2)]
@@ -317,7 +322,8 @@ def test_p1_increase_fallback_flagged():
 
 def test_p1_decrease_fallback_becomes_increase():
     """All d = 1 and k = 1: no decrease is possible, so every event is +1, and the
-    ones that started as a decrease (about half) are flagged."""
+    ones that started as a decrease (about half) are flagged.
+    """
     grid = Grid(n_periods=1, n_roles=2)
     instance = grid.instance(grid.volunteers(2), grid.shifts(2))
     s0 = frozenset({(0, 0), (1, 1)})
@@ -327,12 +333,13 @@ def test_p1_decrease_fallback_becomes_increase():
     assert 0.35 < np.mean([e.fallback for e in events]) < 0.65
 
 
-# --- 13.9: fewer than k eligible targets ---------------------------------------
+# 13.9: fewer than k eligible targets
 
 
 def _short_instance():
     """3 periods, 3 roles, 2 volunteers, one shift per period (role = period).
-    S0 has the single cell (v0, s0): one P2 target (0, 0), one P3 target (0, 0)."""
+    S0 has the single cell (v0, s0): one P2 target (0, 0), one P3 target (0, 0).
+    """
     grid = Grid(n_periods=3, n_roles=3)
     shifts = [make_shift(i, period=i, role=i) for i in range(3)]
     return grid.instance(grid.volunteers(2), shifts), frozenset({(0, 0)})
@@ -387,7 +394,7 @@ def test_too_few_targets_even_after_top_up_raises(sample, k, kwargs):
         sample(instance, s0, k, _rng(0), **kwargs)
 
 
-# --- RQ1 and independent targeting --------------------------------------------
+# RQ1 and independent targeting
 
 
 @pytest.fixture(scope="module")
@@ -406,8 +413,9 @@ def base():
     ],
 )
 def test_rq1_profile_counts(base, profile, counts):
-    """★ The profile counts, in an order that varies with the seed; every event has
-    size k; the sequence applies cleanly step by step."""
+    """The profile counts, in an order that varies with the seed; every event has
+    size k; the sequence applies cleanly step by step.
+    """
     instance, s0 = base
     orders = set()
 
@@ -447,7 +455,8 @@ def test_rq1_same_seed_same_digest(base):
 
 def test_independent_targeting_ignores_s0(base):
     """With targeting "independent" the sequence is the same for any S0 (kind
-    independent); with "s0" a different S0 gives a different sequence."""
+    independent); with "s0" a different S0 gives a different sequence.
+    """
     instance, s0 = base
     other = _pseudo_s0(instance, seed=1)
     profile = SequenceProfile.BALANCED
@@ -481,7 +490,7 @@ def test_rq1_rejects_bad_arguments(base, kwargs):
         pert.rq1_sequence(instance, s0, SequenceProfile.BALANCED, 0, **kwargs)
 
 
-# --- RQ2 -----------------------------------------------------------------------
+# RQ2
 
 
 def _background(seq):
@@ -490,8 +499,9 @@ def _background(seq):
 
 
 def test_rq2_step1_removal_step6_restoration(base):
-    """★ Step 1 removes the selected S0 pair, step 6 restores exactly that pair; in
-    between it stays unavailable."""
+    """Step 1 removes the selected S0 pair, step 6 restores exactly that pair; in
+    between it stays unavailable.
+    """
     instance, s0 = base
 
     for seed in range(10):
@@ -512,7 +522,8 @@ def test_rq2_step1_removal_step6_restoration(base):
 
 def test_rq2_background_counts_and_selected_pair_untouched(base):
     """4 P1, 5 P2, 4 P3 on the other 13 steps; no P2 removes the selected pair and no
-    P3 changes the selected volunteer."""
+    P3 changes the selected volunteer.
+    """
     instance, s0 = base
 
     for seed in range(10):
@@ -531,7 +542,8 @@ def test_rq2_background_counts_and_selected_pair_untouched(base):
 
 def test_rq2_selected_pair_untouched_on_small_instance():
     """Same rule where it bites: 2 volunteers x 4 periods leave only a few pairs, so a
-    background P2 without `exclude` would soon remove the restored pair again."""
+    background P2 without `exclude` would soon remove the restored pair again.
+    """
     grid = Grid(n_periods=4, n_roles=2)
     instance = grid.instance(
         grid.volunteers(2), [make_shift(i, period=i, role=0, demand=2) for i in range(4)]
@@ -550,8 +562,9 @@ def test_rq2_selected_pair_untouched_on_small_instance():
 
 
 def test_rq2_background_independent_of_s0(base):
-    """★ Two different S0s that select the same pair give the same sequence: the
-    background is drawn without S0 (and from its own stream)."""
+    """Two different S0s that select the same pair give the same sequence: the
+    background is drawn without S0 (and from its own stream).
+    """
     instance, _ = base
     by_period = Counter(s.period for s in instance.shifts)
     s1, s2 = next(
@@ -574,7 +587,7 @@ def test_rq2_background_independent_of_s0(base):
         assert not any(getattr(e, "fallback", False) for e in _background(a))
 
 
-# --- the rule behind all samplers ---------------------------------------------
+# The rule behind all samplers
 
 SAMPLERS = {
     pert.sample_p1: {"instance", "s0", "k", "rng"},
@@ -587,8 +600,9 @@ SAMPLERS = {
 
 @pytest.mark.parametrize("sampler", list(SAMPLERS), ids=lambda f: f.__name__)
 def test_no_sampler_accepts_an_arm_schedule(sampler):
-    """★ DESIGN.md rule 5: every arm faces the same events, so no sampler may see an
-    arm's schedule. The only Schedule parameter is s0, and no other parameter exists."""
+    """DESIGN.md rule 5: every arm faces the same events, so no sampler may see an
+    arm's schedule. The only Schedule parameter is s0, and no other parameter exists.
+    """
     assert set(inspect.signature(sampler).parameters) == SAMPLERS[sampler]
 
     hints = typing.get_type_hints(sampler)

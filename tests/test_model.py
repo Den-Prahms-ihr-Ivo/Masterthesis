@@ -1,3 +1,9 @@
+"""Check the data model, validation, immutable updates and sequence digests.
+
+The examples deliberately include empty schedules, unavailable cells and
+invalid values. These checks should fail before bad data reaches a solver.
+"""
+
 import json
 import pytest
 import dataclasses
@@ -30,11 +36,11 @@ from repair.model import (
 from tests.builders import Grid
 import repair.model as model_module
 
-# --- helper --------------------------------------------------------------
+# Helper
 
 META = InstanceMeta(size_class=20, scale=1, seed=0)
 
-# --- a small valid instance: 2 volunteers, 3 shifts, 2 periods x 2 roles ---------------
+# A small valid instance: 2 volunteers, 3 shifts, 2 periods x 2 roles
 
 
 def _volunteers() -> list[Volunteer]:
@@ -130,7 +136,7 @@ def _stage(status, retried=False, name="stage") -> StageRecord:
     )
 
 
-# --- 1.1 model.py --------------------------------------------------------------
+# 1.1 model.py
 
 
 @pytest.mark.parametrize(
@@ -145,7 +151,7 @@ def _stage(status, retried=False, name="stage") -> StageRecord:
 def test_n_cells_is_volunteers_times_shifts(
     n_volunteers, n_shifts, n_periods, n_roles, expected
 ):
-    """Testing the expected number of cells"""
+    """J counts every volunteer-shift combination, including unavailable cells."""
     grid = Grid(n_periods=n_periods, n_roles=n_roles)
     instance = grid.instance(
         grid.volunteers(n_volunteers), grid.shifts(n_shifts), size_class=40
@@ -155,7 +161,7 @@ def test_n_cells_is_volunteers_times_shifts(
 
 
 def test_dataclasses_are_frozen():
-    """Assigning an attribute of Instance, Arm, Sequence, Step raises dataclasses.FrozenInstanceError."""
+    """Changing a stored attribute should raise FrozenInstanceError."""
 
     grid = Grid(n_periods=28, n_roles=2)
     instance = grid.instance(grid.volunteers(1), grid.shifts(1), size_class=40)
@@ -348,11 +354,11 @@ def test_digest_changes_when_one_event_changes(make_variant):
 
 
 def test_digest_pinned():
-    """The digest of a fixed example Sequence never changes silently.
+    """Keep one known sequence digest as a regression check.
 
-    Stored results carry their sequence digest. If the digest function changes
-    (field order, JSON settings, Fraction formatting, a renamed event class),
-    old and new results no longer match. This test makes such a change loud.
+    Changing event fields, serialization or class names can change old and new
+    sequence hashes. This check makes that visible so the change can be
+    reviewed and recorded instead of passing unnoticed.
     """
     # 2026-11-13: changed on purpose, `fallback` added to AvailabilityRemoval and
     # PreferenceChange (open choice 13.9). No stored results existed yet.
@@ -389,7 +395,7 @@ def test_stable_json_rejects_unknown_types():
         _stable_json(frozenset({(0, 0)}))
 
 
-# --- 1.1 validation ---------------------------------------------------------------------
+# 1.1 validation
 
 
 def test_valid_instance_accepted():
@@ -465,12 +471,12 @@ def test_invalid_instance_rejected(make_kwargs):
     ],
 )
 def test_invalid_meta_rejected(meta):
-    """Optional: only if you validate InstanceMeta (in its own __post_init__)."""
+    """Invalid size classes and perturbation scales must fail instance validation."""
     with pytest.raises(ValueError):
         Instance(**_kwargs(meta=meta))
 
 
-# --- 1.1 replace helpers ------------------------------------------------------------------
+# 1.1 replace helpers
 
 
 def test_with_volunteer_replaces_only_that_volunteer():
@@ -552,7 +558,7 @@ def test_every_model_dataclass_is_frozen(cls):
 
 
 def test_frozen_check_sees_the_model_classes():
-    """Guard: the parametrized test above really covers these classes."""
+    """Check that the parametrised immutability test actually includes these classes."""
     names = {cls.__name__ for cls in _model_dataclasses()}
     assert {
         "Volunteer",

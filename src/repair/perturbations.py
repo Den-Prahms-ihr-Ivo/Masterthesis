@@ -1,14 +1,15 @@
-"""Events and sequence sampling (exposé 4.4). Pure: no solver, no I/O.
+"""Apply and sample the perturbation events from exposé 4.4.
 
-apply_event never mutates: it returns a new Instance (Instance.with_volunteer /
-with_shift).
+apply_event returns a new instance using with_volunteer() or with_shift().
+The input stays unchanged, so earlier steps can still be inspected.
 
-The samplers see the instance and S0 only, never an arm's current schedule, so every
-arm faces the identical event list (DESIGN.md rule 5). test_no_sampler_accepts_an_arm_
-schedule enforces this on the signatures.
+Events are sampled from the evolving instance and S0, without seeing a repair
+arm's current schedule. Otherwise a policy could change the events that it and
+the other policies face. This is DESIGN.md rule 5; the test
+test_no_sampler_accepts_an_arm_schedule checks the sampler signatures.
 
 Rules (k = perturbation scale, instance.meta.scale unless given):
-P1  +k or -k with probability 1/2 each, on the CURRENT d_s (after earlier P1 events).
+P1  +k or -k with probability 1/2 each, on the current d_s (after earlier P1 events).
     increase targets: shifts whose staffing in S0 <= current d_s;
       fallback: any shift open in S0 (fallback=True).
     decrease targets: shifts with current d_s - k >= 1;
@@ -17,7 +18,7 @@ P1  +k or -k with probability 1/2 each, on the CURRENT d_s (after earlier P1 eve
 P2  k distinct (w, p) pairs: w currently available in p AND assigned to a shift in
     period p in S0. Independent: any currently available pair.
 P3  k distinct (w, r) pairs: w assigned to a shift of role r in S0; p^role_wr is
-    redrawn uniformly from its two OTHER values. Independent: any (w, r) pair.
+    redrawn uniformly from its two other values. Independent: any (w, r) pair.
 13.9 (decided 2026-11-13): if P2 / P3 has fewer than k eligible targets, take all of
     them and top up from the independent set (fallback=True); ValueError if even that
     set is too small.
@@ -177,8 +178,11 @@ def _targets(
 
 
 def apply_event(instance: Instance, event: Event) -> Instance:
-    """The instance after event. Raises ValueError for an event that would be inert or
-    invalid, because a sampler that produces one has a bug:
+    """Apply one event and return the changed instance.
+
+    Reject invalid targets, invalid values and events that change no input data.
+    This differs from an event being inert for a policy: a valid event can still
+    leave that policy's preferred schedule unchanged.
 
     DemandChange(shift, delta): d_s += delta; ValueError if the result is < 1.
     AvailabilityRemoval(pairs): remove each period from that volunteer's available set;

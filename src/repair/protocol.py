@@ -1,15 +1,17 @@
-"""Protocol: every number the pilot sets, seed derivation, and the experiment matrix.
+"""Load experiment settings, derive seeds and build the job list.
 
-The TOML file holds NUMBERS ONLY (sizes, counts, time limits, calibrated values).
-The structure of the experiment (which cells, which arms, which sequences) is fixed
-by the exposé and therefore lives in code: jobs(protocol). The dated main.toml plus
-the git commit in the manifest freeze the whole design.
+The TOML files hold counts, settings and selected experiment cells. The
+policy combinations and sequence patterns are defined in jobs() according
+to the exposé. A dated protocol and recorded code commit identify the run.
 
-This module and storage.py are the only src/ modules that read files.
+Keep seed derivation here so instance generation, execution and restart
+checks use the same keys. Apart from storage.py, this is the source module
+that reads experiment files.
 """
 
 import hashlib
 import json
+import re
 
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -28,12 +30,12 @@ from repair.model import (
 
 @dataclass(frozen=True)
 class GeneratorConfig:
-    """Table A1. Defaults are the exposé values; [generator] in the TOML may override."""
+    """Defaults from Table A1; a TOML [generator] section can override them."""
 
     n_days: int = 14
     periods_per_day: int = 2
     n_roles: int = 5
-    role_activation: float = 0.6  # rho
+    role_activation: float = 0.6  # Probability that a period-role shift is active (rho).
     commitment_shares: tuple[float, float, float] = (0.24, 0.35, 0.41)
     availability_ranges: tuple[tuple[int, int], ...] = ((3, 7), (10, 16), (18, 26))
     seniority_shares: tuple[float, float, float] = (0.35, 0.40, 0.25)
@@ -41,38 +43,42 @@ class GeneratorConfig:
     caps: tuple[int, ...] = (10, 11, 12)
     min_skill_two_share: float = 0.25  # P(kappa_s = 2)
     expert_share: float = 0.20  # P(e_s = 1 | skill-3 volunteer available)
-    workforce_factor: float = 1.0  # phi; set per job for the under-supplied class
+    workforce_factor: float = 1.0  # Workforce factor phi for under-supplied instances.
     weights: UtilityWeights = field(default_factory=UtilityWeights)
 
 
 @dataclass(frozen=True)
 class SolverSettings:
-    time_limit: float  # tau per stage, seconds (600 in the exposé)
+    """Time limits, retry settings and random seed for each solver stage."""
+
+    time_limit: float  # Time limit in seconds for one stage (tau; exposé default: 600).
     s0_time_limit: float
     seed: int = 0  # SCIP randomization seed shift
     threads: int = 1
-    retry_factor: float = 2.0  # one retry with factor * tau
+    retry_factor: float = 2.0  # Multiply the stage limit by this factor for its single retry.
 
 
 @dataclass(frozen=True)
 class Protocol:
+    """All settings needed to construct the experiment jobs."""
+
     name: str
-    date: str  # ISO date of freezing; "" = not frozen
+    date: str  # Date of protocol freeze; an empty string means it is not frozen.
     root_seed: int
-    horizon: int  # T = 15
+    horizon: int  # Number of perturbation steps, T = 15.
     size_classes: tuple[int, ...]  # main classes still in (adequacy rule)
     cells: tuple[str, ...]  # subset of CELLS this protocol runs
-    n_instances: dict[int, int]  # N_I per main size class
+    n_instances: dict[int, int]  # Base-instance count N_I for each main size class.
     n_instances_secondary: int  # robustness and under-supplied cells (exposé 4.7)
     sensitivity_instances: int | None  # None = all main n=40 instances (exposé 4.5)
-    n_sequences: int  # N_Q
+    n_sequences: int  # Number of sequences per instance and RQ1 profile, N_Q.
     lam: int  # main WQS value (2)
     alpha: Fraction  # main HWF value (1)
     lam_grid: tuple[int, ...]  # sensitivity values (1, 4)
     alpha_grid: tuple[Fraction, ...]  # sensitivity values (1/2, 2)
-    robustness_scale: int | None  # calibrated k for independent targeting
-    rq2_background_scale: int | None  # None -> default k = n/20
-    workforce_factor: float | None  # phi, calibrated
+    robustness_scale: int | None  # Scale k chosen for independent targeting in the pilot.
+    rq2_background_scale: int | None  # If unset, use the default background scale n/20.
+    workforce_factor: float | None  # Workforce factor phi chosen in the pilot.
     generator: GeneratorConfig
     solver: SolverSettings
     max_draws: int = 100
@@ -80,13 +86,15 @@ class Protocol:
 
 
 CELLS = ("main", "rq2", "robustness", "undersupplied")
-# No separate sensitivity cell: exposé 4.5 runs the other lambda/alpha values "as additional arms
-# on the main S0-targeted sequences of the n = 40 balanced profile", so they are extra arms in
-# those main jobs and share their coverage solves and result files.
+# Sensitivity uses extra arms on the existing n=40 balanced main sequences
+# (exposé 4.5). Keeping them in those jobs means the event list, coverage
+# solves and result file are shared with the main arms.
 
 
 @dataclass(frozen=True)
 class InstanceJob:
+    """Identify one base instance that can be reused by several sequence jobs."""
+
     size_class: int  # demand class
     index: int  # 0..N_I-1
     under_supplied: bool = False
@@ -94,7 +102,7 @@ class InstanceJob:
 
 @dataclass(frozen=True)
 class Job:
-    """One sequence to run: the unit of parallelism and of restart."""
+    """One sequence with its arms; this is the unit used for parallel runs and restart."""
 
     cell: str  # one of CELLS
     instance: InstanceJob
@@ -117,7 +125,7 @@ OPTIONAL_KEYS = (
 
 
 def _tuples(value):
-    """TOML arrays -> tuples, also nested ([[3, 7], [10, 16]] -> ((3, 7), (10, 16)))."""
+    """Convert TOML arrays, including nested arrays, into immutable tuples."""
     if isinstance(value, list):
         return tuple(_tuples(item) for item in value)
     return value
@@ -147,7 +155,7 @@ def _validate_frozen(protocol: Protocol) -> None:
                 "for robustness or undersupplied"
             )
 
-    # "is None or <= 0": the template's placeholder 0 must not count as calibrated.
+    # Zero is a template placeholder, not a completed calibration.
     if has_robustness and (
         protocol.robustness_scale is None or protocol.robustness_scale <= 0
     ):
@@ -196,7 +204,7 @@ def load_protocol(path: Path, require_frozen: bool = False) -> Protocol:
         names = ", ".join(sorted(unknown))
         raise ValueError(f"unknown protocol keys: {names}")
 
-    # Convert serialized representations into domain types.
+    # Convert TOML values into the types used by the model.
     if "alpha" in raw:
         raw["alpha"] = Fraction(raw["alpha"])
 
@@ -212,7 +220,7 @@ def load_protocol(path: Path, require_frozen: bool = False) -> Protocol:
             int(size_class): count for size_class, count in raw["n_instances"].items()
         }
 
-    # Optional values: left out of the TOML -> None.
+    # Missing optional fields remain None.
     for name in OPTIONAL_KEYS:
         raw.setdefault(name, None)
 
@@ -245,15 +253,15 @@ def load_protocol(path: Path, require_frozen: bool = False) -> Protocol:
 
 
 def derive_seed(root: int, *keys: str | int) -> int:
-    """A seed for one purpose, derived from the protocol's root seed and a key path.
+    """Derive a reproducible seed from the root and a sequence of keys.
 
-    Example: derive_seed(protocol.root_seed, "instance", 40, 3) seeds instance 3 of
-    size class 40. Every random draw in the study gets its seed this way, so a single
-    root_seed reproduces everything and no two purposes share a seed.
+    For example, (root, "instance", 40, 3) identifies instance 3 of size 40.
+    The key order and types matter, so "1" and 1 are different inputs. Python's
+    hash() is not used because its result changes between processes.
 
-    Deterministic across runs and machines (no hash(): it is salted per process).
-    Sensitive to the root, the order of the keys and their types ("1" != 1).
-    Returns 0 <= seed < SEED_LIMIT.
+    The result is in [0, SEED_LIMIT). Different keys separate the random
+    purposes, but a finite hash range cannot guarantee no collisions. Tests
+    check the seed sets used by the experiment.
     """
     data = json.dumps([root, *keys]).encode("utf-8")
     digest = hashlib.sha256(data).digest()
@@ -262,7 +270,7 @@ def derive_seed(root: int, *keys: str | int) -> int:
 
 
 def main_arms(lam: int, alpha: Fraction) -> tuple[Arm, ...]:
-    """QO plus SF, QL, WQS(lam), HWF(alpha), all chained (QO has no reference)."""
+    """Build QO, SF, QL, WQS and HWF; distance-based arms use chained references."""
     return (
         Arm(policy=PolicyName.QO, reference=None),
         Arm(policy=PolicyName.SF, reference=ReferenceMode.CHAINED),
@@ -273,7 +281,7 @@ def main_arms(lam: int, alpha: Fraction) -> tuple[Arm, ...]:
 
 
 def rq2_arms() -> tuple[Arm, ...]:
-    """SF-anchored and SF-chained: same policy, the reference is the only difference."""
+    """Build SF-anchored and SF-chained so only the repair reference differs."""
     return tuple(
         Arm(policy=PolicyName.SF, reference=reference)
         for reference in (ReferenceMode.ANCHORED, ReferenceMode.CHAINED)
@@ -283,7 +291,7 @@ def rq2_arms() -> tuple[Arm, ...]:
 def sensitivity_arms(
     lam_grid: tuple[int, ...], alpha_grid: tuple[Fraction, ...]
 ) -> tuple[Arm, ...]:
-    """WQS at each lam and HWF at each alpha (the non-main grid values), chained."""
+    """Build the extra chained WQS and HWF arms at their sensitivity values."""
     wqs = tuple(
         Arm(policy=PolicyName.WQS, reference=ReferenceMode.CHAINED, lam=lam)
         for lam in lam_grid
@@ -328,7 +336,7 @@ def instance_jobs(protocol: Protocol) -> list[InstanceJob]:
     "undersupplied" is a cell). Exactly the set {job.instance for job in jobs(protocol)},
     no duplicates. Robustness builds nothing extra: it reuses main n = 40 instances.
     """
-    # dict.fromkeys drops duplicates but keeps the first-seen order (a set would not).
+    # Remove duplicate jobs while keeping their first-seen order.
     return list(dict.fromkeys(job.instance for job in jobs(protocol)))
 
 
@@ -490,3 +498,74 @@ def shard(all_jobs: list[Job], index: int, count: int) -> list[Job]:
         raise ValueError("shard index must satisfy 0 <= index < count")
 
     return all_jobs[index::count]
+
+
+# Seeds and keys for the scripts
+#
+# The generation and execution scripts use these same seed helpers.
+# This keeps their instance and sequence keys consistent. The acceptance
+# check uses the same instance scheme too.
+def _size_key(instance_job: InstanceJob) -> int | str:
+    """Use "u40" for under-supplied instances to give them a separate seed key."""
+    return (
+        f"u{instance_job.size_class}"
+        if instance_job.under_supplied
+        else instance_job.size_class
+    )
+
+
+def instance_seeds(
+    protocol: Protocol, instance_job: InstanceJob
+) -> tuple[int, list[int]]:
+    """(base seed, reserve seeds) of one base instance:
+
+    main class     base = derive_seed(root, "instance", size_class, index)
+                   reserve j = derive_seed(root, "reserve", size_class, index, j)
+    under-supplied the same with the key "u40" in place of the size class
+    j = 0..protocol.n_reserve_seeds - 1. The tests check that the generated
+    base and reserve seed sets are distinct.
+    """
+    key, index = _size_key(instance_job), instance_job.index
+    base = derive_seed(protocol.root_seed, "instance", key, index)
+    reserve = [
+        derive_seed(protocol.root_seed, "reserve", key, index, j)
+        for j in range(protocol.n_reserve_seeds)
+    ]
+    return base, reserve
+
+
+def sequence_seed(protocol: Protocol, job: Job) -> int:
+    """Derive this job's seed from its cell, instance, profile and sequence index."""
+    return derive_seed(
+        protocol.root_seed,
+        "sequence",
+        job.cell,
+        _size_key(job.instance),
+        job.instance.index,
+        str(job.profile),
+        job.sequence_index,
+    )
+
+
+def gate_root(protocol: Protocol) -> int:
+    """Derive a separate root for the M2 check.
+
+    The gate still uses instance_seeds() and sequence_seed(), but under this
+    root. Tests check that the selected gate and run seed sets do not overlap.
+    """
+    return derive_seed(protocol.root_seed, "m2-gate")
+
+
+def job_key(job: Job) -> str:
+    """A readable, unique, file-name-safe key (failure files, logs):
+    "<cell>-n<size>[u]-i<index>-<profile>-q<sequence_index>", e.g.
+    "main-n40-i3-balanced-q0", "undersupplied-n40u-i0-balanced-q1". Only [A-Za-z0-9-].
+    """
+    suffix = "u" if job.instance.under_supplied else ""
+    key = (
+        f"{job.cell}-n{job.instance.size_class}{suffix}-i{job.instance.index}"
+        f"-{job.profile}-q{job.sequence_index}"
+    )
+    if re.fullmatch(r"[A-Za-z0-9-]+", key) is None:
+        raise ValueError(f"job key is not file-name-safe: {key!r}")
+    return key

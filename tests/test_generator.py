@@ -1,8 +1,8 @@
-"""generator.py: seeded instances that follow Table A1.
+"""Check that generated instances follow Table A1 and reuse seeds correctly.
 
-Fast tests check structure and determinism on a few seeds. The @slow tests check the
-distributions on many draws with loose tolerances (several standard errors), so they
-fail for a wrong formula, not by bad luck.
+Small checks cover structure and reproducibility. The slow tests use many
+draws to check distributions with wider tolerances, so normal sampling
+variation is unlikely to cause a failure.
 """
 
 from collections import Counter
@@ -32,7 +32,7 @@ def _has_skill3_available(instance, shift):
     )
 
 
-# --- determinism ---------------------------------------------------------------
+# Determinism
 
 
 def test_same_seed_same_instance():
@@ -55,7 +55,7 @@ def test_streams_are_reproducible_and_distinct():
     assert len({tuple(draws) for draws in first.values()}) == len(generator.SUBSTREAMS)
 
 
-# --- structure -----------------------------------------------------------------
+# Structure
 
 
 @pytest.mark.parametrize("size_class", [20, 40, 80])
@@ -94,7 +94,8 @@ def test_demand_draw_rejects_unknown_size_class(size_class):
 
 def test_volunteer_field_ranges():
     """3..26 available periods, cap in {10, 11, 12}, skills 0..3, seniority 0..2,
-    prefs 0..2, and 5 roles / 28 periods long."""
+    prefs 0..2, and 5 roles / 28 periods long.
+    """
     for instance in _instances(80):
         for v in instance.volunteers:
             assert 3 <= len(v.available) <= 26
@@ -118,7 +119,8 @@ def test_availability_count_inside_a_commitment_range():
 
 def test_expert_only_where_skill3_available():
     """expert=True only if some volunteer with skill 3 in that role is available in
-    that period. Not vacuous: experts do occur."""
+    that period. Not vacuous: experts do occur.
+    """
     instances = _instances(40, seeds=range(10))
 
     for instance in instances:
@@ -137,7 +139,7 @@ def test_no_expert_without_skill3():
         assert not any(s.expert for s in instance.shifts)
 
 
-# --- size and scale ------------------------------------------------------------
+# Size and scale
 
 
 @pytest.mark.parametrize("size_class, k", [(20, 1), (40, 2), (80, 4)])
@@ -187,7 +189,7 @@ def test_under_supplied_only_for_class_40(size_class):
     ],
 )
 def test_under_supplied_rejects_phi_outside_0_1(phi):
-    """Table A1: the under-supplied class has FEWER volunteers, and at least one."""
+    """Table A1: the under-supplied class has fewer volunteers, and at least one."""
     cfg = replace(CFG, workforce_factor=phi)
 
     with pytest.raises(ValueError):
@@ -196,7 +198,7 @@ def test_under_supplied_rejects_phi_outside_0_1(phi):
         generator.generate_instance(cfg, 40, 0, under_supplied=True)
 
 
-# --- sub-stream independence ---------------------------------------------------
+# Sub-stream independence
 
 
 def _components(instance):
@@ -240,7 +242,8 @@ def _components(instance):
 )
 def test_substreams_independent(change, may_differ):
     """Changing one component's distribution leaves every other component identical
-    (in particular availability), and does change the component itself."""
+    (in particular availability), and does change the component itself.
+    """
     for seed in SEEDS:
         before = _components(generator.generate_instance(CFG, 40, seed))
         after = _components(generator.generate_instance(replace(CFG, **change), 40, seed))
@@ -255,7 +258,8 @@ def test_substreams_independent(change, may_differ):
 def test_expert_draws_aligned_with_shift_ids():
     """One expert draw per shift, eligible or not: a shift that is eligible both before
     and after a skill change keeps its expert flag (a draw only for eligible shifts would
-    shift every later draw)."""
+    shift every later draw).
+    """
     cfg = replace(CFG, skill_shares=(0.05, 0.25, 0.40, 0.30))
     compared = 0
 
@@ -273,7 +277,7 @@ def test_expert_draws_aligned_with_shift_ids():
     assert compared > 0
 
 
-# --- capacity_ratio ------------------------------------------------------------
+# Capacity_ratio
 
 
 def test_capacity_ratio_hand_instance(min_crew):
@@ -294,7 +298,7 @@ def test_capacity_ratio_without_shifts(min_crew):
         generator.capacity_ratio(replace(min_crew, shifts=()))
 
 
-# --- distributions (slow) ------------------------------------------------------
+# Distributions (slow)
 
 N_DRAWS = 2000
 
@@ -323,7 +327,8 @@ def test_shift_density(many_instances):
 @pytest.mark.parametrize("size_class, mean", [(20, 1.25), (40, 2.5), (80, 5.0)])
 def test_demand_mean_per_size_class(size_class, mean):
     """1 + Bern(0.25), 2 + Bern(0.5), 4 + Bin(2, 0.5): the support alone would not catch
-    a wrong probability."""
+    a wrong probability.
+    """
     demands = [s.demand for i in _instances(size_class, seeds=range(300)) for s in i.shifts]
 
     assert np.mean(demands) == pytest.approx(mean, abs=0.02)
@@ -332,7 +337,8 @@ def test_demand_mean_per_size_class(size_class, mean):
 @pytest.mark.slow
 def test_commitment_shares(many_instances):
     """Commitment classes ~ (0.24, 0.35, 0.41), recovered from the availability count
-    (the ranges are disjoint); within a class the count is uniform -> mean = midpoint."""
+    (the ranges are disjoint); within a class the count is uniform -> mean = midpoint.
+    """
     ranges = CFG.availability_ranges
     counts = [len(v.available) for i in many_instances for v in i.volunteers]
     classes = [next(c for c, (lo, hi) in enumerate(ranges) if lo <= n <= hi) for n in counts]
@@ -346,7 +352,8 @@ def test_commitment_shares(many_instances):
 @pytest.mark.slow
 def test_seniority_skill_kappa_shares(many_instances):
     """Seniority ~ (0.35, 0.40, 0.25), skill ~ (0.10, 0.30, 0.40, 0.20) per
-    (volunteer, role), P(kappa = 2) ~ 0.25."""
+    (volunteer, role), P(kappa = 2) ~ 0.25.
+    """
     volunteers = [v for i in many_instances for v in i.volunteers]
     shifts = [s for i in many_instances for s in i.shifts]
 

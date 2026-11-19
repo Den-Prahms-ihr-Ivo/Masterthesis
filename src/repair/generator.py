@@ -1,18 +1,14 @@
-"""Seeded instance generation (exposé 4.3, Table A1). Pure: no solver, no I/O.
+"""Draw synthetic instances using the settings in exposé 4.3 and Table A1.
 
-One seed -> one Instance. Every random component draws from its OWN numpy sub-stream:
+The same configuration and seed give the same candidate instance. There is
+no solver or file access here; runner.accept_instance handles acceptance.
 
-    streams = dict(zip(SUBSTREAMS, map(np.random.default_rng,
-                                       np.random.SeedSequence(seed).spawn(len(SUBSTREAMS)))))
+Each random component has its own NumPy stream. For example, changing the
+skill distribution should not shift the availability draws. This separation
+also requires a fixed draw count where one component depends on another.
+assign_experts therefore draws once per shift, even for ineligible shifts.
 
-so changing one component's distribution (e.g. skill_shares) never shifts the draws of
-another (e.g. availability). For that to hold, the NUMBER of draws from a stream must
-not depend on another stream's results (see the expert flags below).
-
-Acceptance (does a fully covered schedule exist?) needs the solver, so it does not live
-here but in the runner (step 3).
-
-Order of the shifts: period-major, (period 0, role 0), (0, 1), ..., ids 0..|S|-1.
+Shifts are ordered by period and then role, with ids from 0 to |S| - 1.
 """
 
 from __future__ import annotations
@@ -24,28 +20,28 @@ from math import floor
 from repair.model import Instance, InstanceMeta, Shift, Volunteer
 from repair.protocol import GeneratorConfig
 
-# One sub-stream per random component. A spawned child depends only on (seed, its
-# position), so appending a name keeps every existing stream; reordering or removing a
-# name changes the instances of every seed.
+# Each component has a fixed position in the spawned random streams.
+# Appending a name keeps the old streams, but moving or deleting a name
+# changes which stream the later components receive.
 SUBSTREAMS = (
     "shifts",  # which (period, role) combinations are active (rho)
-    "demand",  # d_s
-    "min_skill",  # kappa_s
-    "expert",  # e_s
+    "demand",  # Requested staff per shift, d_s.
+    "min_skill",  # Minimum skill requirement, kappa_s.
+    "expert",  # Expert requirement, e_s.
     "commitment",  # commitment class per volunteer
     "availability",  # availability count and placement
-    "skill",  # k_wr
-    "seniority",  # sigma_w
-    "cap",  # L_w
-    "pref_role",  # p^role_wr
-    "pref_time",  # p^time_wp
+    "skill",  # Skill per volunteer and role, k_wr.
+    "seniority",  # Volunteer seniority, sigma_w.
+    "cap",  # Volunteer workload cap, L_w.
+    "pref_role",  # Preference for each role.
+    "pref_time",  # Preference for each period.
 )
 
-UNDER_SUPPLIED_CLASS = 40  # the under-supplied class keeps the n = 40 demand
+UNDER_SUPPLIED_CLASS = 40  # Fewer volunteers, but keep the staffing-demand distribution of n=40.
 
 
 def make_streams(seed: int) -> dict[str, np.random.Generator]:
-    """One independent Generator per name in SUBSTREAMS, all derived from `seed`."""
+    """Create one random generator per component, all derived from the given seed."""
     children = np.random.SeedSequence(seed).spawn(len(SUBSTREAMS))
 
     return {
@@ -217,12 +213,12 @@ def assign_experts(
     volunteers: tuple[Volunteer, ...],
     rng: np.random.Generator,
 ) -> tuple[Shift, ...]:
-    """e_s = 1 with probability cfg.expert_share, but only for shifts that have an
-    available volunteer with skill 3 in the shift's role (otherwise e_s = 0: an expert
-    requirement nobody can meet would make the instance infeasible by construction).
+    """Set the expert flag only where an available skill-3 volunteer exists.
 
-    Draw ONE uniform per shift, eligible or not, so the expert stream stays aligned with
-    the shift ids even when other components change who is eligible.
+    For eligible shifts, the probability is cfg.expert_share. I draw one number
+    for every shift, including ineligible ones, so eligibility changes do not
+    shift the later random draws. This check does not guarantee full coverage;
+    the same expert may be needed on competing shifts.
     """
     draws = rng.random(len(shifts))
     out: list[Shift] = []
@@ -281,12 +277,12 @@ def scale_for(size_class: int) -> int:
 def generate_instance(
     cfg: GeneratorConfig, size_class: int, seed: int, under_supplied: bool = False
 ) -> Instance:
-    """One candidate instance. Identical arguments -> identical Instance.
+    """Build one candidate; acceptance is a separate step.
 
-    n_periods = cfg.n_days * cfg.periods_per_day, n_roles = cfg.n_roles,
-    weights = cfg.weights, meta = InstanceMeta(size_class, scale_for(size_class), seed,
-    under_supplied). Steps: make_streams -> generate_shifts -> generate_volunteers
-    (n_volunteers_for) -> assign_experts.
+    First create the random streams, then the shifts and volunteers, and finally
+    the expert flags. The metadata records the demand class, scale and seed.
+    The period count is cfg.n_days * cfg.periods_per_day. Equal inputs give an
+    equal Instance, but do not guarantee that all demand can be covered.
     """
     scale = scale_for(size_class)
     n_volunteers = n_volunteers_for(
@@ -332,9 +328,11 @@ def generate_instance(
 
 
 def capacity_ratio(instance: Instance) -> float:
-    """sum_w L_w / sum_s d_s: pilot diagnostic for the workload-cap remark in 4.3.
+    """Compare total workload capacity with total requested staffing.
 
-    ValueError if the instance has no shifts (the ratio is undefined).
+    The ratio is sum_w L_w / sum_s d_s (exposé 4.3). It is a pilot diagnostic,
+    not a feasibility test: availability and skill can still prevent coverage.
+    An instance without shifts has no defined ratio and raises ValueError.
     """
     if not instance.shifts:
         raise ValueError("capacity ratio is undefined for an instance with no shifts")

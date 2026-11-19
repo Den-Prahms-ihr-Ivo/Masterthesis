@@ -1,10 +1,10 @@
-"""Hand-derived expected values: tests/fixtures_sheet.md in code form.
+"""Hand-calculated fixture values from tests/fixture_value_sheet.md.
 
-The only expected values in the project that are not derived from the code.
-If a value here and the sheet disagree, the sheet wins: fix this file, then find out
-how they diverged.
+These are the reference numbers for testing the calculations and solvers.
+Do not regenerate them with the code they are meant to check. If this file
+disagrees with the sheet, compare the calculation by hand before changing it.
 
-Cells are (volunteer_id, shift_id). In repair_slice: A = 0, B = 1, C = 2.
+A cell is (volunteer_id, shift_id). In repair_slice, A = 0, B = 1, C = 2.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _s(*cells: tuple[int, int]) -> frozenset[tuple[int, int]]:
 
 NONE: frozenset[str] = frozenset()                        # no violations: the schedule is feasible
 
-# --------------------------------------------------------------------- single_shift
+# Single_shift
 SINGLE_SHIFT_ROWS = {                                     # all 4 schedules; none violates a rule
     _s(): Row(NONE, 1, 0),
     _s((0, 0)): Row(NONE, 0, 6),
@@ -41,7 +41,7 @@ SINGLE_SHIFT_ROWS = {                                     # all 4 schedules; non
 }
 SINGLE_SHIFT_OPTIMUM = _s((0, 0))                         # [MinShortfall, MaxQuality]
 
-# --------------------------------------------------------------------- min_crew
+# Min_crew
 MIN_CREW_ROWS = {                                         # all 4 schedules; v1 is never available
     _s(): Row(NONE, 3, 0),
     _s((0, 0)): Row(frozenset({"min_crew"}), 2, 5),
@@ -58,7 +58,7 @@ MIN_CREW_BOTH_ROWS = {                                    # the same 4 schedules
 }
 MIN_CREW_BOTH_OPTIMUM = _s((0, 0), (1, 0))                # the pair has the lower Lambda
 
-# --------------------------------------------------------------------- expert_shift
+# Expert_shift
 EXPERT_SHIFT_ROWS = {                                     # the listed schedules; only v0 can staff expert s0
     _s(): Row(NONE, 2, 0),
     _s((1, 0)): Row(frozenset({"expert"}), 1, 1),
@@ -73,7 +73,7 @@ EXPERT_SHIFT_ROWS = {                                     # the listed schedules
 EXPERT_SHIFT_OPTIMUM_QUALITY_ONLY = _s((0, 1))           # [MaxQuality]
 EXPERT_SHIFT_OPTIMUM = _s((0, 0), (1, 1))                # [MinShortfall, MaxQuality]
 
-# --------------------------------------------------------------------- repair_slice
+# Repair_slice
 REPAIR_SLICE_ROWS_0 = {                                   # under the initial instance
     _s((0, 0), (1, 1), (2, 2)): Row(NONE, 0, 18),
     _s((0, 2), (1, 1), (2, 0)): Row(NONE, 0, 16),

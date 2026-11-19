@@ -1,8 +1,8 @@
-"""tests/expected.py: internal consistency of the hand-derived values.
+"""Check that the hand-calculated reference values agree with each other.
 
-These tests use no project code except the data types. They check that the sheet's
-numbers agree with each other. Later the Brute Force Solver will prove optimality.
-At this point these are derived by hand.
+These tests use the data types but do not calculate scores through the
+oracle or MILP. The brute-force tests check the claimed optima separately.
+The values themselves are in repair.expected.
 """
 
 from fractions import Fraction
@@ -32,7 +32,7 @@ def _coverage_first_best(rows):
     return {s for s, r in feasible.items() if (r.lam, -r.u) == best}
 
 
-# --- shape of the data -------------------------------------------------------------
+# Shape of the data
 
 
 @pytest.mark.parametrize("name", list(ALL_ROWS))
@@ -53,7 +53,7 @@ def test_rows_use_known_rule_names_and_int_values(name):
         assert type(row.u) is int
 
 
-# --- stated optima -----------------------------------------------------------------
+# Stated optima
 
 
 @pytest.mark.parametrize(
@@ -91,7 +91,7 @@ def test_quality_only_beats_coverage_first_on_u():
     assert qo.u > cf.u and qo.lam > cf.lam == 0
 
 
-# --- repair_slice --------------------------------------------------------------------
+# Repair_slice
 
 
 def test_s0_is_infeasible_after_the_event():

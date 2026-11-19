@@ -1,37 +1,44 @@
-"""Oracle: hard constraints, U(S) and Lambda(S), re-implemented in plain Python.
+"""Check a schedule directly with the rules from exposé 4.2.
 
-Must never import milp or objectives: it is the independent check of both.
+I keep these calculations separate from the MILP. Otherwise, the solver and
+its check could agree because they use the same wrong formula. This module
+therefore does not import milp or objectives.
 
-Hard constraints (exposé 4.2):
-- assignment only in available periods;
-- at most one shift per volunteer and period;
-- at most L_w shifts per volunteer;
-- open shift (>= 1 assignee): >= ceil(d_s/2) assignees, >= 1 with skill >= kappa_s,
-  and if expert-flagged >= 1 with skill 3.
-A shift with no assignees is cancelled and satisfies its constraints.
+A volunteer can only work in an available period, at most once per period,
+and at most L_w times in total. An open shift needs ceil(d_s / 2) people,
+someone with skill >= kappa_s in its role, and skill 3 if it requires an
+expert. A shift with nobody assigned is cancelled. This is allowed, but its
+full demand still counts towards shortfall.
 
-Quality:
-U(S) = sum u_ws x_ws + beta_mentor * sum y_s + beta_buffer * sum z_s - gamma * sum q_s
-  u_ws = 2 p^role_{w,r(s)} + p^time_{w,p(s)} + k_{w,r(s)}
-  q_s  = max(0, sum_w x_ws - d_s);  z_s = min(b_s, q_s)
-  y_s  = 1 iff s has a novice (k <= 1) and a mentor-eligible volunteer (sigma = 2, k >= 2)
-Lambda(S) = sum_s max(0, d_s - sum_w x_ws)   (cancelled shift -> full d_s)
-All values are integers.
+The quality and coverage formulas are:
+    u_ws = 2 * p_role[w, r(s)] + p_time[w, p(s)] + k[w, r(s)]
+    U(S) = sum(u_ws * x_ws) + beta_mentor * sum(y_s)
+           + beta_buffer * sum(z_s) - gamma * sum(q_s)
+    q_s = max(0, staffing_s - d_s); z_s = min(b_s, q_s)
+    Lambda(S) = sum(max(0, d_s - staffing_s))
+
+y_s is 1 when a novice (skill <= 1) and a mentor (seniority 2, skill >= 2)
+work together in that shift. All returned scores are integers.
 """
 
 from math import ceil
 from repair.model import Instance, Schedule, Shift, ShiftId, Volunteer, VolunteerId
 
-# ------------------------------------------------------------------ feasibility
+# Feasibility
 
 
 def min_crew(demand: int) -> int:
-    """ceil(d_s / 2)."""
+    """The minimum crew for an open shift: ceil(d_s / 2)."""
     return ceil(demand / 2)
 
 
 def violations(schedule: Schedule, instance: Instance) -> list[str]:
-    """Human-readable list of every violated hard constraint; empty iff feasible."""
+    """List the hard constraints that the schedule breaks.
+
+    An empty list means the schedule is feasible. Missing coverage is handled
+    by shortfall(), so it is not a violation by itself. The cells are expected
+    to refer to existing volunteers and shifts.
+    """
     found: list[str] = []
     crew: dict[ShiftId, list[Volunteer]] = {s.id: [] for s in instance.shifts}
     worked: dict[VolunteerId, list[Shift]] = {v.id: [] for v in instance.volunteers}
@@ -69,19 +76,26 @@ def violations(schedule: Schedule, instance: Instance) -> list[str]:
 
 
 def is_feasible(schedule: Schedule, instance: Instance) -> bool:
+    """Return True when the schedule breaks no hard constraint."""
+
     return not violations(schedule, instance)
 
 
 def cancelled_shifts(schedule: Schedule, instance: Instance) -> frozenset[ShiftId]:
-    """Shifts with no assignee."""
+    """Return the ids of shifts with nobody assigned."""
     return frozenset(s for s, n in staffing(schedule, instance).items() if n == 0)
 
 
-# ------------------------------------------------------------------ quality and coverage
+# Quality and coverage
 
 
 def assignment_utility(instance: Instance, w: VolunteerId, s: ShiftId) -> int:
-    """u_ws = 2 p^role_{w,r(s)} + p^time_{w,p(s)} + k_{w,r(s)}."""
+    """Calculate the contribution of one volunteer on one shift.
+
+    u_ws = 2 * p_role[w, r(s)] + p_time[w, p(s)] + k[w, r(s)].
+    Role preference has twice the weight of time preference. Skill is looked
+    up for this shift's role, not for the volunteer in general.
+    """
     volunteer = instance.volunteers[w]
     shift = instance.shifts[s]
     return (
@@ -92,7 +106,7 @@ def assignment_utility(instance: Instance, w: VolunteerId, s: ShiftId) -> int:
 
 
 def staffing(schedule: Schedule, instance: Instance) -> dict[ShiftId, int]:
-    """Assignees per shift, 0 for cancelled shifts; every shift appears."""
+    """Count people on every shift, including zero for cancelled shifts."""
     count: dict[ShiftId, int] = {s.id: 0 for s in instance.shifts}
     for _, s in schedule:
         count[s] += 1
@@ -100,13 +114,20 @@ def staffing(schedule: Schedule, instance: Instance) -> dict[ShiftId, int]:
 
 
 def surplus(schedule: Schedule, instance: Instance) -> dict[ShiftId, int]:
-    """q_s."""
+    """Count assignments above demand for each shift: q_s = max(0, staffing - d_s).
+
+    Understaffed and cancelled shifts both have zero surplus.
+    """
     count = staffing(schedule, instance)
     return {s.id: max(0, count[s.id] - s.demand) for s in instance.shifts}
 
 
 def mentored(schedule: Schedule, instance: Instance) -> frozenset[ShiftId]:
-    """Shifts with y_s = 1."""
+    """Return shifts where a novice and a mentor work together (y_s = 1).
+
+    Both skill checks use the shift's role. Seniority 2 alone does not make
+    someone a mentor; that person also needs skill >= 2 in this role.
+    """
     crew: dict[ShiftId, list[Volunteer]] = {s.id: [] for s in instance.shifts}
     for w, s in schedule:
         crew[s].append(instance.volunteers[w])
@@ -122,7 +143,12 @@ def mentored(schedule: Schedule, instance: Instance) -> frozenset[ShiftId]:
 
 
 def quality(schedule: Schedule, instance: Instance) -> int:
-    """U(S)."""
+    """Calculate U(S) from the assignments, mentoring, buffer and surplus.
+
+    The buffer reward stops at buffer_cap, while every extra assignment still
+    receives the surplus penalty. This function evaluates the given schedule;
+    it does not check feasibility or search for a better one.
+    """
     weights = instance.weights
     utility = sum(assignment_utility(instance, w, s) for w, s in schedule)
     mentor = weights.beta_mentor * len(mentored(schedule, instance))
@@ -135,6 +161,10 @@ def quality(schedule: Schedule, instance: Instance) -> int:
 
 
 def shortfall(schedule: Schedule, instance: Instance) -> int:
-    """Lambda(S)."""
+    """Add the missing people over all shifts to obtain Lambda(S).
+
+    A cancelled shift contributes its whole demand. Extra people on one shift
+    do not compensate for missing people on another shift.
+    """
     count = staffing(schedule, instance)
     return sum(max(0, s.demand - count[s.id]) for s in instance.shifts)

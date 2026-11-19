@@ -1,7 +1,4 @@
-"""bruteforce.py
-
-The brute force is the reference for the MILP, so it is tested against the hand values first.
-"""
+"""Check the small reference solver against the hand-calculated fixture values."""
 
 import pytest
 
@@ -23,7 +20,7 @@ def _feasible(rows):
     return {schedule for schedule, row in rows.items() if row.violations == NONE}
 
 
-# --- all_schedules -------------------------------------------------------------
+# All_schedules
 
 
 def test_single_shift_has_four_feasible_schedules(single_shift):
@@ -51,7 +48,7 @@ def test_all_schedules_rejects_large_instances():
         next(all_schedules(instance))
 
 
-# --- solve_stage ---------------------------------------------------------------
+# Solve_stage
 
 
 def test_maxquality_single_shift(single_shift):
