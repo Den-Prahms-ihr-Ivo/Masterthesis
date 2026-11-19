@@ -1,0 +1,51 @@
+# Pilot settings for deciding the counts and calibrated values of the main run.
+# The selected cells and numeric settings are here; protocol.py builds their
+# arms and sequence jobs according to the exposé.
+#
+# Store fractions as strings, for example alpha = "1/2". The loader converts
+# them to Fraction. Leave out optional values that are not set, since TOML has
+# no null value.
+#
+# These counts are placeholders.
+#
+# Cells: main and rq2 only. robustness and undersupplied need robustness_scale and
+# workforce_factor, which the pilot phase is there to calibrate, so jobs() cannot
+# build them yet. Order (decided 2026-11-18, NOTES.md):
+#   1. calibrate.py phi / intensity / background: reads only this file, not pilot
+#      results, so it runs before or next to the pilot run;
+#   2. the pilot run (these cells) under monitor.py;
+#   3. plan_precision.py: costs robustness and undersupplied jobs like main jobs with
+#      the same size and arm count (planned_matrix), so it needs no pilot run of them.
+
+name = "pilot"
+date = ""            # This is the pilot, not the frozen main run.
+root_seed = 20261109 # Keep pilot draws separate from the main root seed.
+
+horizon = 15         # T: number of perturbation steps.
+size_classes = [20, 40, 80]
+cells = ["main", "rq2"]
+
+n_instances_secondary = 2
+n_sequences = 2      # N_Q per instance and RQ1 profile.
+
+lam = 2              # WQS quality cost per changed cell.
+alpha = "1"          # HWF history weight, parsed as a Fraction.
+lam_grid = [1, 4]
+alpha_grid = ["1/2", "2"]
+
+# Optional fields, unset here (calibrate.py produces the values for main.toml):
+# sensitivity_instances, robustness_scale, rq2_background_scale, workforce_factor
+
+[n_instances]        # N_I per size class; the loader converts the keys to integers.
+20 = 2
+40 = 2
+80 = 2
+
+[solver]
+time_limit = 600.0   # tau per stage: exposé §4.7 fixes 600 s, so the same as main.toml
+s0_time_limit = 600.0 # (stage times and certification rates are only representative then)
+seed = 0
+threads = 1
+retry_factor = 2.0
+
+# Add [generator] to override GeneratorConfig fields. Without it, use Table A1 defaults.
