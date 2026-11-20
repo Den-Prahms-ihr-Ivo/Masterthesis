@@ -137,12 +137,16 @@ def test_load_pilot_toml():
     assert p.alpha == Fraction(1)
     assert p.alpha_grid == (Fraction(1, 2), Fraction(2))
     assert p.lam_grid == (1, 4)
-    assert p.n_instances == {20: 2, 40: 2, 80: 2}
+    assert p.n_instances == {20: 10, 40: 10, 80: 10}
     assert all(isinstance(key, int) for key in p.n_instances)
     assert p.size_classes == (20, 40, 80)
-    assert p.cells == ("main", "rq2")  # the calibrated cells are not piloted (NOTES 2026-11-18)
-    assert p.robustness_scale is None  # left out -> None
-    assert p.workforce_factor is None
+    # calibrated 2026-11-20, so all four cells are piloted (NOTES 2026-11-20)
+    assert p.cells == ("main", "rq2", "robustness", "undersupplied")
+    assert p.n_sequences == 1 and p.n_instances_secondary == 5
+    assert p.robustness_scale == 3
+    assert p.workforce_factor == 0.55
+    assert p.rq2_background_scale is None  # left out -> None (default k = n/20)
+    assert p.sensitivity_instances is None
     assert p.generator == protocol.GeneratorConfig()  # no [generator] -> defaults
     assert p.solver == protocol.SolverSettings(time_limit=600.0, s0_time_limit=600.0)
 
