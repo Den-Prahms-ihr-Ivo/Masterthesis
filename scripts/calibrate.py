@@ -4,8 +4,10 @@ phi tests workforce factors and selects the largest tested one with proven
 positive shortfall in at least 80% of raw under-supplied candidates.
 
 intensity compares independent targeting with the S0-targeted balanced
-design. It chooses the scale whose mean non-inert state count is closest
-to the target (the proposed definition in DESIGN.md 13.5). It uses one
+design. It chooses the scale whose mean non-inert event count is closest
+to the target (DESIGN.md 13.5). Each event is judged alone on the base
+instance (decided 2026-11-20); an event that is invalid there is counted
+as skipped, never as inert or non-inert. It uses one
 sequence per accepted instance and the same seeds across scales. A tie
 between scales is resolved in favour of the smaller k.
 
@@ -31,7 +33,7 @@ from repair import milp
 from repair.generator import generate_instance
 from repair.model import SequenceProfile
 from repair.objectives import MAX_QUALITY, MIN_SHORTFALL
-from repair.perturbations import instances_along, rq1_sequence, rq2_sequence
+from repair.perturbations import apply_event, rq1_sequence, rq2_sequence
 from repair.protocol import derive_seed, load_protocol
 from repair.runner import (
     accept_instance,
@@ -100,8 +102,8 @@ def _accepted_cases(protocol, n_instances: int):
 def _non_inert(protocol, instance_t, s0, context: str) -> bool:
     """Check whether S0 is binding or worse than the best quality at minimum shortfall.
 
-    This compares the current cumulative state with fixed S0. It does not
-    isolate the effect of the latest event, and uses no repair-policy outcome.
+    instance_t is the base instance with one event applied (see _count_non_inert),
+    compared with fixed S0. It uses no repair-policy outcome.
     A hard-constraint violation already makes S0 binding; otherwise solve the
     coverage and quality stages to decide.
     """
@@ -118,21 +120,29 @@ def _non_inert(protocol, instance_t, s0, context: str) -> bool:
 
 
 def _count_non_inert(protocol, instance, s0, sequence, *, background_only=False):
-    """Count non-inert states while applying the sequence in order.
+    """Return (non-inert, skipped): each event judged alone on the base instance.
 
-    background_only skips counting steps 1 and 6, but still applies them. Their
-    effects therefore remain present when later background states are checked.
+    DESIGN 13.5 (decided 2026-11-20): event t is applied to the base instance on
+    its own, not to the instance after events 1..t. An event that is invalid on
+    the base instance (e.g. a preference change back to the base value, which is
+    meaningful only after an earlier event) is counted as skipped, never as inert
+    or non-inert. background_only leaves steps 1 and 6 out entirely.
     """
 
-    count = 0
-    for t, instance_t in enumerate(instances_along(instance, sequence.events), 1):
+    count = skipped = 0
+    for t, event in enumerate(sequence.events, 1):
         if background_only and t in (1, 6):
+            continue
+        try:
+            instance_t = apply_event(instance, event)
+        except ValueError:
+            skipped += 1
             continue
         context = (
             f"instance seed={instance.meta.seed}, sequence seed={sequence.seed}, t={t}"
         )
         count += _non_inert(protocol, instance_t, s0, context)
-    return count
+    return count, skipped
 
 
 def calibrate_phi(protocol, grid: list[float], n_candidates: int) -> list[dict]:
@@ -194,7 +204,7 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
     """Match independent-targeting intensity to the S0-targeted design.
 
     Reuse each accepted instance, S0 and sequence seed for all candidate scales.
-    Count non-inert cumulative states against S0 and select the closest total,
+    Count non-inert events against S0 and select the closest total,
     preferring the smaller scale in a tie. Equal sequence lengths make matching
     totals equivalent to matching mean counts or rates.
     """
@@ -206,8 +216,9 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
         _positive_count(k, "scale")
     scales = sorted(set(scales))
 
-    target_count = 0
+    target_count = target_skipped = 0
     independent_counts = dict.fromkeys(scales, 0)
+    independent_skipped = dict.fromkeys(scales, 0)
     for i, instance, s0 in _accepted_cases(protocol, n_instances):
         # Reuse the sequence seed across the targeted design and all scales.
         # Each comparison also starts from the same accepted instance and S0.
@@ -220,7 +231,9 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
             targeting="s0",
             scale=2,
         )
-        target_count += _count_non_inert(protocol, instance, s0, target)
+        non_inert, skipped = _count_non_inert(protocol, instance, s0, target)
+        target_count += non_inert
+        target_skipped += skipped
         for k in scales:
             independent = rq1_sequence(
                 instance,
@@ -230,13 +243,23 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
                 targeting="independent",
                 scale=k,
             )
-            independent_counts[k] += _count_non_inert(
-                protocol, instance, s0, independent
-            )
+            non_inert, skipped = _count_non_inert(protocol, instance, s0, independent)
+            independent_counts[k] += non_inert
+            independent_skipped[k] += skipped
 
-    # All sequences have 15 steps and equal weight, so matching total counts,
-    # mean counts per sequence, or pooled rates chooses the same scale.
-    chosen = min(scales, key=lambda k: (abs(independent_counts[k] - target_count), k))
+    # Compare rates over the events actually judged: a skipped event is neither inert
+    # nor non-inert, and skips grow with k, so raw counts would favour larger k.
+    def judged_rate(non_inert, skipped):
+        judged = 15 * n_instances - skipped
+        return non_inert / judged if judged else float("nan")
+
+    target_judged_rate = judged_rate(target_count, target_skipped)
+    independent_judged_rate = {
+        k: judged_rate(independent_counts[k], independent_skipped[k]) for k in scales
+    }
+    chosen = min(
+        scales, key=lambda k: (abs(independent_judged_rate[k] - target_judged_rate), k)
+    )
     return [
         {
             "root_seed": protocol.root_seed,
@@ -244,12 +267,17 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
             "n_instances": n_instances,
             "n_sequences": n_instances,
             "n_events": 15 * n_instances,
+            "target_skipped": target_skipped,
+            "independent_skipped": independent_skipped[k],
             "target_non_inert": target_count,
             "independent_non_inert": independent_counts[k],
             "target_mean": target_count / n_instances,
             "independent_mean": independent_counts[k] / n_instances,
             "target_rate": target_count / (15 * n_instances),
             "independent_rate": independent_counts[k] / (15 * n_instances),
+            "target_judged_rate": target_judged_rate,
+            "independent_judged_rate": independent_judged_rate[k],
+            "judged_rate_difference": independent_judged_rate[k] - target_judged_rate,
             "mean_difference": (independent_counts[k] - target_count) / n_instances,
             "selected": k == chosen,
         }
@@ -260,25 +288,28 @@ def calibrate_intensity(protocol, scales: list[int], n_instances: int) -> list[d
 def calibrate_background(protocol, n_instances: int) -> list[dict]:
     """Report RQ2 background diagnostics at the default k = 40 / 20 = 2.
 
-    Steps 1 and 6 are left out of the count, but their effects remain in the
-    evolving instance. For example, the forced absence can keep S0 infeasible
-    during steps 2..5. This is not a separate estimate of background effects
+    Steps 1 and 6 are left out; every other event is judged alone on the base
+    instance, so the forced absence does not carry into steps 2..5. This is
+    not a separate estimate of background effects
     and is not used to choose a scale or compare the two repair arms.
     """
     _positive_count(n_instances, "n_instances")
-    count = 0
+    count = skipped = 0
     for i, instance, s0 in _accepted_cases(protocol, n_instances):
         seed = derive_seed(protocol.root_seed, "calibration", "background", i)
         sequence = rq2_sequence(instance, s0, seed, scale=2)
-        count += _count_non_inert(
+        non_inert, n_skipped = _count_non_inert(
             protocol, instance, s0, sequence, background_only=True
         )
+        count += non_inert
+        skipped += n_skipped
     return [
         {
             "root_seed": protocol.root_seed,
             "scale": 2,
             "n_instances": n_instances,
             "n_background_steps": 13 * n_instances,
+            "skipped": skipped,
             "non_inert_background_states": count,
             "mean_non_inert_background_states": count / n_instances,
             "calibrated": False,

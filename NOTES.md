@@ -117,9 +117,7 @@ Fixed against the new tests: `CoverageStep.record`, DataFrame rows, zero-count s
 
 Other cells need calibration first. `calibrate.py` can run before or alongside the pilot. Runtime planning uses main jobs with matching size and arm count to estimate the other cells. Including them directly would need provisional protocol values.
 
-Noch offen: time limit (60 vs. 600 s) and counts (currently 2/2). MAIN_RUN_CHECKLIST.md D.
-
-Copied `DESIGN.md` and `ROADMAP.md` from the old project. Updated DESIGN.md §7 running/monitoring notes.
+Noch offen: time limit (60 vs. 600 s) and counts (currently 2/2).
 
 ## 2026-11-19
 
@@ -157,3 +155,109 @@ M1, two workers, tag `dry_run_1`, clean working tree. `dry-run.toml`: 183 jobs, 
 - Ten analysis tables (R1), identical reruns (R7), planted-effect tests passed (R8).
 
 Laptop done. Still test on the server: Linux worker startup (`fork`/`spawn`) and Ctrl-C inside SCIP (R4), `uv sync --locked`, Gmail port 587, health-check pings and CPU timings.
+
+- **2026-11-20 Server rehearsal: Gate M3 passed.**
+  Hetzner CCX23 (4 vCPUs) in Helsinki, Ubuntu 24.04, CPU "AMD EPYC-Milan Processor",
+  4 workers, tag `run-rehearsal-1`, protocol/dry-run.toml (183 jobs, n = 20, 60 s per stage).
+  - It took about 30 minutes from the first "monitor started" mail to "finished",
+    including the deliberate Ctrl-C, the stop after the planted abort and the restarts.
+    This is not a speed measurement.
+  - Everything worked as it should:
+    - the packages installed on Linux with `uv sync --locked`, and all tests and the
+      smoke test passed;
+    - the mails reached me from the server (test mail, start, every 10 %, failure,
+      abort, finished), and the health-check alert came after the monitor stopped;
+    - the planted error in job 10 sent a failure mail, and the run kept going;
+    - Ctrl-C at about 40 % and a restart continued where it stopped, without new
+      failure files. So stopping inside SCIP also works on Linux, where the workers
+      are started differently than on the Mac;
+    - the planted assertion in job 120 sent a failure mail and an abort mail, and
+      no new jobs started;
+    - after removing the plants, jobs 10 and 120 ran again and the run finished
+      with no failures;
+    - the analysis wrote all 10 tables, a rerun of two jobs gave identical results,
+      and the analysis found the planted effects and said "inconclusive" on noise.
+  - Lesson for the pilot server: the GitHub key must be loaded into the laptop's
+    SSH agent (`ssh-add`) before `ssh -A`, or `git clone` on the server fails with
+    "Permission denied (publickey)".
+  - Results copied to the laptop; server deleted; health check back to 10 / 30 min.
+  - Intensity selection rule changed before the pilot (2026-11-20): compare non-inert rates over
+    judged events, not counts. Reason: skipped events grow with k (target 4; k=3: 33; k=4: 40),
+    so counts favoured larger k (counts chose 4, judged rates choose 3). Target 285/296 = 96.3 %,
+    k=3 255/267 = 95.5 %. robustness_scale = 3.
+
+## 2026-11-20 Calibration and pilot settings
+
+**Workforce factor (phi) for the under-supplied cell: 0.55.**
+The rule is: take the largest tested phi at which at least 80 % of 20 raw
+candidates cannot be fully staffed (proven positive shortfall). None of the
+default values 0.95 to 0.60 met it; the highest was 65 % at 0.60 (24 volunteers).
+I extended the grid downward. 0.55 (22 volunteers) reached 95 %, and 0.50 to 0.35
+also passed. I also tested 0.58 (23 volunteers), the only volunteer count
+in between: 75 %, so it fails. So phi = 0.55. This makes the cell strongly
+under-supplied (22 volunteers for the demand of size class 40), which the thesis
+has to state.
+
+**What counts as a "non-inert" event (open choice 13.5): decided.**
+An event is non-inert if, with only that event applied to the base instance,
+S0 breaks a hard rule or is no longer the best schedule (lowest shortfall,
+then highest quality). The first version applied all events up to step t and
+judged S0 on that. It saturated: almost every step counted for every scale
+(targeted 299 of 300, independent 283 to 300 of 300), because after a few
+events S0 is simply out of date, whatever the events were. So it could not
+tell the scales apart. Some events only make sense after an earlier event
+(for example a preference changed back to its base value). They are invalid
+on the base instance and are counted as "skipped", never as inert or non-inert.
+
+**Robustness scale (k) for independent targeting: 3.**
+The targeted design (k = 2) has 285 non-inert events out of 296 judged (96.3 %).
+Independent targeting: k = 1 57.0 %, k = 2 80.1 %, k = 3 95.5 %, k = 4 99.2 %.
+k = 3 is closest (0.8 percentage points below the target).
+
+The selection rule was changed before the pilot, after seeing these results:
+the scale is now chosen by the non-inert rate over judged events, not by the
+count. Reason: skipped events grow with k (targeted 4; k = 3: 33; k = 4: 40). A
+skipped event can never count, so raw counts are pushed down at large k and
+favour a larger k. On counts the rule picked 4, on judged rates 3. The change
+is mechanical, made before any pilot result existed, and is in calibrate.py
+with a test.
+
+**RQ2 background: default k = 2, not calibrated (open choice 13.6).**
+There is no stated target to calibrate to. Diagnostic only: 200 of 259 judged
+background steps were non-inert, 1 skipped.
+
+**Pilot settings (protocol/pilot.toml).**
+
+- Time limit 600 s per stage and for S0, as the exposé (§4.7) fixes, so the
+  pilot's timings and certification rates carry over to the main run.
+- 10 instances per size class, 1 sequence per instance and profile,
+  5 instances for each secondary cell; all four cells; 130 jobs.
+- Robustness and under-supplied cells are back in the pilot now that their
+  values exist (they were left out on 2026-11-18 only for that reason). The
+  pilot checks whether under-supplied instances at phi = 0.55 still get a
+  proven-optimal S0 within 600 s.
+- Solver seed and threads: the runner does not pass them on, but
+  milp.solve_stage's defaults are the same (seed 0, one thread), so the runs
+  are seeded and single-threaded as intended. The TOML values stay as they are.
+  **Robustness scale (k): 3.** The exposé asks that the expected number of non-inert
+  events against S0 match the main design. Some events cannot be judged alone on the
+  base instance and are skipped, more of them at larger k (targeted 4; k = 3: 33; k = 4: 40),
+  so raw counts underestimate that number at large k. The expected number per
+  sequence is therefore estimated as 15 × the non-inert rate over judged events:
+  targeted 14.4, k = 1 8.6, k = 2 12.0, k = 3 14.3, k = 4 14.9. Closest: k = 3.
+  (Raw counts would have chosen 4; changed before the pilot, in calibrate.py with a test.)
+
+  **Adequacy rule (form fixed 2026-11-20, numbers from the pilot).**
+  A size class enters the primary analysis if the main run can be expected to
+  deliver the required number of certified base instances for every primary
+  outcome: N_I(required) / s ≤ N_I(affordable), where s is the pilot's share of
+  sequences certified through each outcome's endpoint (T = 15 for the RQ1
+  outcomes, through step 15 for D_i), and N_I(affordable) is what the 1,000
+  core-hour budget allows for that size class after the other classes are
+  planned. Classes are considered in the order 20, 40, 80. A class that fails
+  is reported in the secondary analysis only.
+
+  **RQ2 background scale: fixed at k = 2 (= n/20) before the main run.** The exposé asks
+  for it to be calibrated and recorded but names no target, so it is fixed at the
+  default; diagnostic: 200 of 259 judged background steps non-inert, 1 skipped.
+  (Not to be confused with the robustness scale k = 3 above.)

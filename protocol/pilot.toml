@@ -6,16 +6,12 @@
 # them to Fraction. Leave out optional values that are not set, since TOML has
 # no null value.
 #
-# These counts are placeholders.
+# Filled in 2026-11-20 after calibration (NOTES.md). Tagged as run-pilot-1.
 #
-# Cells: main and rq2 only. robustness and undersupplied need robustness_scale and
-# workforce_factor, which the pilot phase is there to calibrate, so jobs() cannot
-# build them yet. Order (decided 2026-11-18, NOTES.md):
-#   1. calibrate.py phi / intensity / background: reads only this file, not pilot
-#      results, so it runs before or next to the pilot run;
-#   2. the pilot run (these cells) under monitor.py;
-#   3. plan_precision.py: costs robustness and undersupplied jobs like main jobs with
-#      the same size and arm count (planned_matrix), so it needs no pilot run of them.
+# Cells: all four. robustness and undersupplied were left out until
+# robustness_scale and workforce_factor were calibrated (decided 2026-11-18).
+# They are calibrated now, and the pilot must show whether under-supplied
+# instances at phi = 0.55 still get a certified S0 within 600 s.
 
 name = "pilot"
 date = ""            # This is the pilot, not the frozen main run.
@@ -23,29 +19,32 @@ root_seed = 20261109 # Keep pilot draws separate from the main root seed.
 
 horizon = 15         # T: number of perturbation steps.
 size_classes = [20, 40, 80]
-cells = ["main", "rq2"]
+cells = ["main", "rq2", "robustness", "undersupplied"]
 
-n_instances_secondary = 2
-n_sequences = 2      # N_Q per instance and RQ1 profile.
+n_instances_secondary = 5  # instances for robustness and undersupplied (at most the n = 40 count)
+n_sequences = 1      # N_Q per instance and RQ1 profile; the instance is the unit of analysis.
 
 lam = 2              # WQS quality cost per changed cell.
 alpha = "1"          # HWF history weight, parsed as a Fraction.
 lam_grid = [1, 4]
 alpha_grid = ["1/2", "2"]
 
-# Optional fields, unset here (calibrate.py produces the values for main.toml):
-# sensitivity_instances, robustness_scale, rq2_background_scale, workforce_factor
+# Calibrated 2026-11-20 (results/pilot-calibration, NOTES.md):
+robustness_scale = 3      # independent targeting, judged-rate rule (DESIGN 13.5)
+workforce_factor = 0.55   # largest tested phi with >= 80 % positive shortfall
+# Unset on purpose: rq2_background_scale (default k = n/20, DESIGN 13.6),
+# sensitivity_instances (default: all main n = 40 instances).
 
 [n_instances]        # N_I per size class; the loader converts the keys to integers.
-20 = 2
-40 = 2
-80 = 2
+20 = 10
+40 = 10
+80 = 10
 
 [solver]
 time_limit = 600.0   # tau per stage: exposé §4.7 fixes 600 s, so the same as main.toml
 s0_time_limit = 600.0 # (stage times and certification rates are only representative then)
-seed = 0
-threads = 1
+seed = 0             # not read by the runner; milp.solve_stage uses 0 by default as well
+threads = 1          # not read by the runner; milp.solve_stage uses 1 by default as well
 retry_factor = 2.0
 
 # Add [generator] to override GeneratorConfig fields. Without it, use Table A1 defaults.

@@ -6,6 +6,7 @@ SELECTION LOGIC and the BOOKKEEPING without SCIP:
     and the certification rule (a zero incumbent proves zero; a positive one proves nothing);
   - intensity: closest scale, ties to the smaller k, paired seeds, the row arithmetic;
   - background: never reported as calibrated, steps 1 and 6 skipped;
+  - _count_non_inert: each event judged ALONE on the base instance (13.5, 2026-11-20);
   - _accepted_cases: the same seed scheme as make_instances (protocol.instance_seeds);
   - _non_inert: the DESIGN 13.5 definition (binding, or a better schedule exists);
   - main(): no CSV after a failure, exit codes.
@@ -85,11 +86,14 @@ def _proven(*shortfalls):
 
 def test_phi_selects_the_largest_passing_factor(monkeypatch):
     """0.9: 3/5 positive (60 %, fails); 0.8: 4/5 (80 %, passes); 0.7: 5/5 (passes)."""
-    _script_phi(monkeypatch, {
-        0.9: _proven(1, 1, 1, 0, 0),
-        0.8: _proven(2, 1, 1, 1, 0),
-        0.7: _proven(3, 2, 2, 1, 1),
-    })
+    _script_phi(
+        monkeypatch,
+        {
+            0.9: _proven(1, 1, 1, 0, 0),
+            0.8: _proven(2, 1, 1, 1, 0),
+            0.7: _proven(3, 2, 2, 1, 1),
+        },
+    )
 
     rows = calibrate.calibrate_phi(PROTOCOL, [0.9, 0.8, 0.7], 5)
 
@@ -102,7 +106,9 @@ def test_phi_selects_the_largest_passing_factor(monkeypatch):
     assert all(r["root_seed"] == ROOT and r["n_candidates"] == 5 for r in rows)
 
 
-@pytest.mark.parametrize("positives, passes", [(0, False), (3, False), (4, True), (5, True)])
+@pytest.mark.parametrize(
+    "positives, passes", [(0, False), (3, False), (4, True), (5, True)]
+)
 def test_phi_80_percent_rule_is_inclusive(monkeypatch, positives, passes):
     _script_phi(monkeypatch, {0.8: _proven(*([1] * positives + [0] * (5 - positives)))})
 
@@ -150,7 +156,9 @@ def test_phi_zero_incumbent_at_time_limit_counts_as_zero(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "outcome", [(2, TL), (None, NONE)], ids=["positive-incumbent-at-time-limit", "no-schedule"]
+    "outcome",
+    [(2, TL), (None, NONE)],
+    ids=["positive-incumbent-at-time-limit", "no-schedule"],
 )
 def test_phi_unproven_positive_shortfall_stops_the_calibration(monkeypatch, outcome):
     """A positive incumbent does not prove a positive optimum: never count it, never drop it."""
@@ -214,8 +222,8 @@ def _script_intensity(monkeypatch, target, independent):
     def fake_count(protocol, instance, s0, sequence, *, background_only=False):
         assert not background_only
         if sequence.targeting == "s0":
-            return target[sequence.i]
-        return independent[sequence.scale][sequence.i]
+            return target[sequence.i], 0
+        return independent[sequence.scale][sequence.i], 0
 
     monkeypatch.setattr(calibrate, "_accepted_cases", fake_cases)
     monkeypatch.setattr(calibrate, "rq1_sequence", fake_rq1)
@@ -225,9 +233,7 @@ def _script_intensity(monkeypatch, target, independent):
 
 def test_intensity_selects_the_scale_closest_to_the_target(monkeypatch):
     """Target total 8. Independent totals 2, 7, 11, 16: scale 2 is 1 away."""
-    _script_intensity(
-        monkeypatch, [3, 5], {1: [1, 1], 2: [3, 4], 3: [5, 6], 4: [8, 8]}
-    )
+    _script_intensity(monkeypatch, [3, 5], {1: [1, 1], 2: [3, 4], 3: [5, 6], 4: [8, 8]})
 
     rows = calibrate.calibrate_intensity(PROTOCOL, [1, 2, 3, 4], 2)
 
@@ -249,12 +255,15 @@ def test_intensity_row_arithmetic(monkeypatch):
 
     [row] = calibrate.calibrate_intensity(PROTOCOL, [3], 2)
 
-    assert row == {
+    # approx: the rate difference is a difference of two rounded floats
+    assert row == pytest.approx({
         "root_seed": ROOT,
         "scale": 3,
         "n_instances": 2,
         "n_sequences": 2,
         "n_events": 30,
+        "target_skipped": 0,
+        "independent_skipped": 0,
         "target_non_inert": 8,
         "independent_non_inert": 12,
         "target_mean": 4.0,
@@ -262,8 +271,11 @@ def test_intensity_row_arithmetic(monkeypatch):
         "target_rate": 8 / 30,
         "independent_rate": 12 / 30,
         "mean_difference": 2.0,
+        "target_judged_rate": 8 / 30,
+        "independent_judged_rate": 12 / 30,
+        "judged_rate_difference": 4 / 30,
         "selected": True,
-    }
+    })
 
 
 def test_intensity_scales_are_sorted_and_deduplicated(monkeypatch):
@@ -283,10 +295,16 @@ def test_intensity_sequences_are_paired_within_an_instance(monkeypatch):
 
     for i, _, s0 in cases:
         mine = [c for c in calls if c["i"] == i]
-        assert {c["seed"] for c in mine} == {derive_seed(ROOT, "calibration", "intensity", i)}
-        assert all(c["s0"] == s0 and c["profile"] == SequenceProfile.BALANCED for c in mine)
+        assert {c["seed"] for c in mine} == {
+            derive_seed(ROOT, "calibration", "intensity", i)
+        }
+        assert all(
+            c["s0"] == s0 and c["profile"] == SequenceProfile.BALANCED for c in mine
+        )
         assert sorted((c["targeting"], c["scale"]) for c in mine) == [
-            ("independent", 1), ("independent", 4), ("s0", 2)
+            ("independent", 1),
+            ("independent", 4),
+            ("s0", 2),
         ]
 
 
@@ -307,7 +325,8 @@ def test_intensity_rejects_a_bad_instance_count(n):
 
 def test_background_is_a_diagnostic_at_k2_never_a_calibration(monkeypatch):
     cases: list[tuple[int, SimpleNamespace, frozenset]] = [
-        (i, SimpleNamespace(meta=SimpleNamespace(seed=i)), frozenset()) for i in range(3)
+        (i, SimpleNamespace(meta=SimpleNamespace(seed=i)), frozenset())
+        for i in range(3)
     ]
     rq2_calls: list = []
     count_calls: list = []
@@ -319,17 +338,20 @@ def test_background_is_a_diagnostic_at_k2_never_a_calibration(monkeypatch):
 
     def fake_count(protocol, instance, s0, sequence, *, background_only=False):
         count_calls.append(background_only)
-        return 2
+        return 2, 1
 
     monkeypatch.setattr(calibrate, "rq2_sequence", fake_rq2)
     monkeypatch.setattr(calibrate, "_count_non_inert", fake_count)
 
     [row] = calibrate.calibrate_background(PROTOCOL, 3)
 
-    assert rq2_calls == [(i, derive_seed(ROOT, "calibration", "background", i), 2) for i in range(3)]
+    assert rq2_calls == [
+        (i, derive_seed(ROOT, "calibration", "background", i), 2) for i in range(3)
+    ]
     assert count_calls == [True, True, True]
     assert row["calibrated"] is False and row["scale"] == 2
     assert row["n_background_steps"] == 39
+    assert row["skipped"] == 3
     assert row["non_inert_background_states"] == 6
     assert row["mean_non_inert_background_states"] == 2.0
     assert row["selection_rule"] == "default_n_over_20_no_target_specified"
@@ -338,30 +360,55 @@ def test_background_is_a_diagnostic_at_k2_never_a_calibration(monkeypatch):
 # --- _count_non_inert --------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("background_only, counted", [(False, list(range(1, 16))),
-                                                      (True, [2, 3, 4, 5] + list(range(7, 16)))])
-def test_count_non_inert_visits_every_step_or_only_background_steps(
+@pytest.mark.parametrize(
+    "background_only, counted",
+    [(False, list(range(1, 16))), (True, [2, 3, 4, 5] + list(range(7, 16)))],
+)
+def test_count_non_inert_applies_each_event_alone_to_the_base_instance(
     monkeypatch, background_only, counted
 ):
-    """Steps 1 and 6 are skipped in the count but still applied to later instances."""
-    steps = [f"instance_{t}" for t in range(1, 16)]
-    seen: list[str] = []
+    """13.5 (decided 2026-11-20): event t is judged on base + event t, not on the
+    instance after all events up to t. Steps 1 and 6 are skipped for the background."""
+    base = SimpleNamespace(meta=SimpleNamespace(seed=1))
+    applied: list = []
+    judged: list = []
 
-    def non_inert(p, inst_t, s0, ctx):
-        seen.append(inst_t)
+    def fake_apply(instance, event):
+        applied.append(instance)
+        return f"base+{event}"
+
+    def fake_non_inert(p, inst, s0, ctx):
+        judged.append(inst)
         return True
 
-    monkeypatch.setattr(calibrate, "instances_along", lambda instance, events: steps)
-    monkeypatch.setattr(calibrate, "_non_inert", non_inert)
-    instance = SimpleNamespace(meta=SimpleNamespace(seed=1))
-    sequence = SimpleNamespace(events=(), seed=2)
+    monkeypatch.setattr(calibrate, "apply_event", fake_apply)
+    monkeypatch.setattr(calibrate, "_non_inert", fake_non_inert)
+    sequence = SimpleNamespace(events=tuple(f"e{t}" for t in range(1, 16)), seed=2)
 
     got = calibrate._count_non_inert(
-        PROTOCOL, instance, frozenset(), sequence, background_only=background_only
+        PROTOCOL, base, frozenset(), sequence, background_only=background_only
     )
 
-    assert got == len(counted)
-    assert seen == [f"instance_{t}" for t in counted]
+    assert got == (len(counted), 0)
+    assert all(instance is base for instance in applied)
+    assert judged == [f"base+e{t}" for t in counted]
+
+
+def test_count_non_inert_skips_an_event_invalid_on_the_base_instance(monkeypatch):
+    """E.g. a preference change back to the base value: meaningful only after an earlier
+    event. It is counted as skipped, never as inert or non-inert."""
+
+    def fake_apply(instance, event):
+        if event == "e2":
+            raise ValueError("new value equals the current value")
+        return event
+
+    monkeypatch.setattr(calibrate, "apply_event", fake_apply)
+    monkeypatch.setattr(calibrate, "_non_inert", lambda p, inst, s0, ctx: True)
+    sequence = SimpleNamespace(events=("e1", "e2", "e3"), seed=2)
+    base = SimpleNamespace(meta=SimpleNamespace(seed=1))
+
+    assert calibrate._count_non_inert(PROTOCOL, base, frozenset(), sequence) == (2, 1)
 
 
 # --- _non_inert (DESIGN 13.5) ------------------------------------------------------------
@@ -378,11 +425,15 @@ def _script_non_inert(monkeypatch, violations, s0_values, opt_values, status=OPT
         return _lex(optimum, status, status)
 
     monkeypatch.setattr(calibrate, "_solve", fake_solve)
-    monkeypatch.setattr(calibrate, "oracle", SimpleNamespace(
-        violations=lambda s, inst: violations if s == s0 else [],
-        shortfall=lambda s, inst: values[s][0],
-        quality=lambda s, inst: values[s][1],
-    ))
+    monkeypatch.setattr(
+        calibrate,
+        "oracle",
+        SimpleNamespace(
+            violations=lambda s, inst: violations if s == s0 else [],
+            shortfall=lambda s, inst: values[s][0],
+            quality=lambda s, inst: values[s][1],
+        ),
+    )
     return s0, solves
 
 
@@ -420,21 +471,31 @@ def test_non_inert_refuses_an_unproven_optimum(monkeypatch):
 
 @pytest.fixture
 def brute_force_calibrate(monkeypatch):
-    monkeypatch.setattr(calibrate, "milp", SimpleNamespace(solve_stage=bruteforce.solve_stage))
+    monkeypatch.setattr(
+        calibrate, "milp", SimpleNamespace(solve_stage=bruteforce.solve_stage)
+    )
 
 
 def test_s0_is_inert_on_its_own_instance(repair_slice, brute_force_calibrate):
-    s0 = initial_schedule(repair_slice, PROTOCOL.solver, bruteforce.solve_stage).schedule
+    s0 = initial_schedule(
+        repair_slice, PROTOCOL.solver, bruteforce.solve_stage
+    ).schedule
 
     assert calibrate._non_inert(PROTOCOL, repair_slice, s0, "base") is False
 
 
-def test_removing_an_assigned_pair_makes_s0_non_inert(repair_slice, brute_force_calibrate):
-    s0 = initial_schedule(repair_slice, PROTOCOL.solver, bruteforce.solve_stage).schedule
+def test_removing_an_assigned_pair_makes_s0_non_inert(
+    repair_slice, brute_force_calibrate
+):
+    s0 = initial_schedule(
+        repair_slice, PROTOCOL.solver, bruteforce.solve_stage
+    ).schedule
     assert s0 is not None
     w, s = min(s0)
     period = next(shift.period for shift in repair_slice.shifts if shift.id == s)
-    after = perturbations.apply_event(repair_slice, AvailabilityRemoval(pairs=((w, period),)))
+    after = perturbations.apply_event(
+        repair_slice, AvailabilityRemoval(pairs=((w, period),))
+    )
 
     assert calibrate._non_inert(PROTOCOL, after, s0, "removal") is True
 
@@ -451,7 +512,8 @@ def _script_acceptance(monkeypatch, s0_status=OPT):
 
     monkeypatch.setattr(calibrate, "accept_instance", fake_accept)
     monkeypatch.setattr(
-        calibrate, "initial_schedule",
+        calibrate,
+        "initial_schedule",
         lambda instance, settings, solve: _lex(frozenset({(0, 0)}), s0_status),
     )
     return calls
@@ -489,7 +551,9 @@ def _main(tmp_path, what, *extra):
     return out, calibrate.main([what, str(PILOT), "--out", str(out), *extra])
 
 
-def test_main_writes_the_table_and_exits_0_when_a_value_is_selected(tmp_path, monkeypatch, capsys):
+def test_main_writes_the_table_and_exits_0_when_a_value_is_selected(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setattr(calibrate, "calibrate_phi", lambda p, grid, n: ROWS)
 
     out, code = _main(tmp_path, "phi")
@@ -497,7 +561,8 @@ def test_main_writes_the_table_and_exits_0_when_a_value_is_selected(tmp_path, mo
     assert code == 0
     with (out / "calibration_phi.csv").open() as file:
         assert list(csv.DictReader(file)) == [
-            {"phi": "0.9", "selected": "False"}, {"phi": "0.8", "selected": "True"}
+            {"phi": "0.9", "selected": "False"},
+            {"phi": "0.8", "selected": "True"},
         ]
     assert "Written:" in capsys.readouterr().out
 
@@ -505,7 +570,8 @@ def test_main_writes_the_table_and_exits_0_when_a_value_is_selected(tmp_path, mo
 def test_main_passes_the_cli_arguments_through(tmp_path, monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(
-        calibrate, "calibrate_intensity",
+        calibrate,
+        "calibrate_intensity",
         lambda p, scales, n: seen.update(scales=scales, n=n, root=p.root_seed) or ROWS,
     )
 
@@ -514,7 +580,9 @@ def test_main_passes_the_cli_arguments_through(tmp_path, monkeypatch):
     assert seen == {"scales": [2, 3], "n": 7, "root": ROOT}
 
 
-def test_main_exits_1_when_nothing_is_selected_but_keeps_the_table(tmp_path, monkeypatch, capsys):
+def test_main_exits_1_when_nothing_is_selected_but_keeps_the_table(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setattr(
         calibrate, "calibrate_phi", lambda p, grid, n: [{"phi": 0.9, "selected": False}]
     )
@@ -539,15 +607,22 @@ def test_main_failure_writes_no_table(tmp_path, monkeypatch, capsys):
     assert "Calibration failed: phi=0.8" in capsys.readouterr().err
 
 
-def test_main_background_exits_0_and_says_it_is_a_default(tmp_path, monkeypatch, capsys):
+def test_main_background_exits_0_and_says_it_is_a_default(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setattr(
-        calibrate, "calibrate_background", lambda p, n: [{"scale": 2, "calibrated": False}]
+        calibrate,
+        "calibrate_background",
+        lambda p, n: [{"scale": 2, "calibrated": False}],
     )
 
     _, code = _main(tmp_path, "background")
 
     assert code == 0
-    assert "k=2 is a documented default, not a calibrated value." in capsys.readouterr().out
+    assert (
+        "k=2 is a documented default, not a calibrated value."
+        in capsys.readouterr().out
+    )
 
 
 # --- the real thing, once ----------------------------------------------------------------
@@ -572,3 +647,33 @@ def test_intensity_with_scip_on_one_instance():
     assert sum(r["selected"] for r in rows) == 1
     assert all(0 <= r["independent_non_inert"] <= 15 for r in rows)
     assert len({r["target_non_inert"] for r in rows}) == 1  # one targeted count for all
+
+
+def test_intensity_compares_rates_over_judged_events(monkeypatch):
+    """Target: 30 of 30 judged non-inert (rate 1.0). Scale 1: 27 of 30 (0.9).
+    Scale 2: 26 of 26 judged, 4 skipped (1.0). Counts would pick scale 1 (27 is
+    closer to 30 than 26); judged rates pick scale 2."""
+    cases: list[tuple[int, SimpleNamespace, frozenset]] = [
+        (i, SimpleNamespace(meta=SimpleNamespace(seed=100 + i)), frozenset())
+        for i in range(2)
+    ]
+    monkeypatch.setattr(calibrate, "_accepted_cases", lambda p, n: iter(cases))
+    monkeypatch.setattr(
+        calibrate,
+        "rq1_sequence",
+        lambda inst, s0, prof, seed, **kw: SimpleNamespace(**kw),
+    )
+    results = {
+        ("s0", 2): (15, 0),
+        ("independent", 1): (13.5, 0),
+        ("independent", 2): (13, 2),
+    }
+    monkeypatch.setattr(
+        calibrate,
+        "_count_non_inert",
+        lambda p, inst, s0, seq, **kw: results[(seq.targeting, seq.scale)],
+    )
+
+    rows = calibrate.calibrate_intensity(PROTOCOL, [1, 2], 2)
+
+    assert [(r["scale"], r["selected"]) for r in rows] == [(1, False), (2, True)]
